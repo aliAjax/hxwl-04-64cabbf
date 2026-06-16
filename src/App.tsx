@@ -27,6 +27,8 @@ const project = {
   "filters": [
     "开髓",
     "测长",
+    "根管预备",
+    "冲洗",
     "封药",
     "充填"
   ],
@@ -44,19 +46,106 @@ const project = {
       "#36",
       "慢性根尖周炎",
       "封药",
-      "MB 19.5mm，主尖锉#30"
+      "MB 19.5mm，主尖锉#30",
+      "待复诊"
     ],
     [
       "#11",
       "外伤后变色",
       "充填",
-      "单根管，冷侧压完成"
+      "单根管，冷侧压完成",
+      "已充填"
     ],
     [
       "#46",
       "急性牙髓炎",
       "测长",
-      "近中双根管需复诊"
+      "近中双根管需复诊",
+      "待复诊"
+    ],
+    [
+      "#14",
+      "深龋穿髓",
+      "开髓",
+      "开髓孔通畅，出血明显",
+      "待复诊"
+    ],
+    [
+      "#25",
+      "慢性牙髓炎",
+      "根管预备",
+      "MB2 18mm，主尖锉#25",
+      "待复诊"
+    ],
+    [
+      "#37",
+      "牙髓坏死",
+      "冲洗",
+      "3%NaClO冲洗，超声荡洗",
+      "待复诊"
+    ],
+    [
+      "#16",
+      "急性根尖周炎",
+      "开髓",
+      "开髓引流，脓液溢出",
+      "待复诊"
+    ],
+    [
+      "#21",
+      "牙体缺损",
+      "充填",
+      "热牙胶垂直加压，桩道预备",
+      "已充填"
+    ],
+    [
+      "#47",
+      "慢性根尖周脓肿",
+      "根管预备",
+      "远中根20mm，弯曲根管",
+      "待复诊"
+    ],
+    [
+      "#15",
+      "可逆性牙髓炎",
+      "冲洗",
+      "生理盐水冲洗，EDTA预备",
+      "待复诊"
+    ],
+    [
+      "#26",
+      "隐裂牙",
+      "封药",
+      "Ca(OH)2封药，一周后复诊",
+      "待复诊"
+    ],
+    [
+      "#31",
+      "外伤露髓",
+      "测长",
+      "17mm，根尖孔闭合",
+      "待复诊"
+    ],
+    [
+      "#45",
+      "慢性牙髓炎急性发作",
+      "根管预备",
+      "预备至#30，5.25%NaClO冲洗",
+      "待复诊"
+    ],
+    [
+      "#24",
+      "深龋",
+      "开髓",
+      "局麻下开髓，冠髓切除",
+      "待复诊"
+    ],
+    [
+      "#35",
+      "根尖周炎",
+      "充填",
+      "恰填，术后片显示良好",
+      "已充填"
     ]
   ]
 };
@@ -79,7 +168,40 @@ interface FormErrors {
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
 
-const steps = ["开髓", "测长", "根管预备", "封药", "充填"];
+const steps = ["开髓", "测长", "根管预备", "冲洗", "封药", "充填"];
+
+const stageColors: Record<string, string> = {
+  "开髓": "#ea580c",
+  "测长": "#0369a1",
+  "根管预备": "#7c3aed",
+  "冲洗": "#059669",
+  "封药": "#db2777",
+  "充填": "#0891b2",
+};
+
+function extractWorkingLength(detail: string): number | null {
+  const match = detail.match(/(\d+\.?\d*)mm/);
+  return match ? parseFloat(match[1]) : null;
+}
+
+function calculateMetrics(records: string[][], activeStage: string | null) {
+  const filteredRecords = activeStage
+    ? records.filter(r => r[2] === activeStage)
+    : records;
+
+  const pendingReview = filteredRecords.filter(r => r[4] === "待复诊").length;
+  const filled = filteredRecords.filter(r => r[2] === "充填").length;
+  const medicationCases = filteredRecords.filter(r => r[2] === "封药").length;
+
+  const lengths = filteredRecords
+    .map(r => extractWorkingLength(r[3]))
+    .filter((n): n is number => n !== null);
+  const avgLength = lengths.length > 0
+    ? (lengths.reduce((a, b) => a + b, 0) / lengths.length).toFixed(1) + "mm"
+    : "-";
+
+  return [String(pendingReview), String(filled), avgLength, String(medicationCases)];
+}
 
 function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
   return (
@@ -102,14 +224,15 @@ const initialFormData: CaseRecord = {
 };
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
-
   const [records, setRecords] = useState<string[][]>(project.records);
   const [formData, setFormData] = useState<CaseRecord>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [activeStage, setActiveStage] = useState<string | null>(null);
+
+  const metricValues = calculateMetrics(records, activeStage);
+  const filteredRecords = activeStage
+    ? records.filter(r => r[2] === activeStage)
+    : records;
 
   const handleInputChange = (field: keyof CaseRecord, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -174,7 +297,29 @@ function App() {
 
       <section className="metrics-grid">
         {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+          <MetricCard key={metric} label={metric} value={metricValues[index]} index={index} />
+        ))}
+      </section>
+
+      <section className="stage-tabs">
+        <button
+          className={`stage-tab ${activeStage === null ? 'active' : ''}`}
+          onClick={() => setActiveStage(null)}
+        >
+          全部
+        </button>
+        {steps.map((stage) => (
+          <button
+            key={stage}
+            className={`stage-tab ${activeStage === stage ? 'active' : ''}`}
+            style={activeStage === stage ? { '--stage-color': stageColors[stage] } as React.CSSProperties : {}}
+            onClick={() => setActiveStage(stage)}
+          >
+            {stage}
+            <span className="stage-count">
+              {records.filter(r => r[2] === stage).length}
+            </span>
+          </button>
         ))}
       </section>
 
@@ -280,21 +425,38 @@ function App() {
       <section className="records panel">
         <div className="section-heading">
           <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
+            <p>{activeStage ? `${activeStage}阶段` : "全部病例"}</p>
+            <h2>
+              {activeStage ? `${activeStage}病例` : "近期记录"}
+              <span className="record-total">共 {filteredRecords.length} 条</span>
+            </h2>
           </div>
           <button>导出摘要</button>
         </div>
         <div className="record-list">
-          {records.map((record: string[], index: number) => (
-            <article key={record.join("-") + index} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
+          {filteredRecords.length > 0 ? (
+            filteredRecords.map((record: string[], index: number) => (
+              <article key={record.join("-") + index} className="record-card">
+                <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
+                <div className="record-content">
+                  <div className="record-header">
+                    <h3>{record[0]}</h3>
+                    <span
+                      className="stage-badge"
+                      style={{ backgroundColor: stageColors[record[2]] }}
+                    >
+                      {record[2]}
+                    </span>
+                  </div>
+                  <p>{record.slice(1, 4).join(" · ")}</p>
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">
+              <p>该阶段暂无病例记录</p>
+            </div>
+          )}
         </div>
       </section>
     </main>
