@@ -1,3 +1,4 @@
+import { useState } from "react";
 import "./styles.css";
 
 const project = {
@@ -60,7 +61,25 @@ const project = {
   ]
 };
 
+interface CaseRecord {
+  toothPosition: string;
+  diagnosis: string;
+  currentStep: string;
+  workingLength: string;
+  mainFileNumber: string;
+  medication: string;
+  remark: string;
+}
+
+interface FormErrors {
+  toothPosition?: string;
+  diagnosis?: string;
+  currentStep?: string;
+}
+
 const statusColors = ["status-ok", "status-watch", "status-danger"];
+
+const steps = ["开髓", "测长", "根管预备", "封药", "充填"];
 
 function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
   return (
@@ -72,11 +91,72 @@ function MetricCard({ label, value, index }: { label: string; value: string; ind
   );
 }
 
+const initialFormData: CaseRecord = {
+  toothPosition: "",
+  diagnosis: "",
+  currentStep: "",
+  workingLength: "",
+  mainFileNumber: "",
+  medication: "",
+  remark: "",
+};
+
 function App() {
   const values = project.metrics.map((metric: string, index: number) => {
     const base = [84, 12, 31, 7][index % 4];
     return String(base + index * 3);
   });
+
+  const [records, setRecords] = useState<string[][]>(project.records);
+  const [formData, setFormData] = useState<CaseRecord>(initialFormData);
+  const [errors, setErrors] = useState<FormErrors>({});
+
+  const handleInputChange = (field: keyof CaseRecord, value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (errors[field as keyof FormErrors]) {
+      setErrors(prev => ({ ...prev, [field]: undefined }));
+    }
+  };
+
+  const validateForm = (): boolean => {
+    const newErrors: FormErrors = {};
+    if (!formData.toothPosition.trim()) {
+      newErrors.toothPosition = "请填写牙位";
+    }
+    if (!formData.diagnosis.trim()) {
+      newErrors.diagnosis = "请填写诊断";
+    }
+    if (!formData.currentStep.trim()) {
+      newErrors.currentStep = "请选择当前步骤";
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = () => {
+    if (!validateForm()) return;
+
+    const details: string[] = [];
+    if (formData.workingLength) details.push(`工作长度 ${formData.workingLength}`);
+    if (formData.mainFileNumber) details.push(`主尖锉${formData.mainFileNumber}`);
+    if (formData.medication) details.push(`封药：${formData.medication}`);
+    if (formData.remark) details.push(formData.remark);
+
+    const newRecord: string[] = [
+      formData.toothPosition,
+      formData.diagnosis,
+      formData.currentStep,
+      details.join("，") || "无附加信息",
+    ];
+
+    setRecords(prev => [newRecord, ...prev]);
+    handleClear();
+  };
+
+  const handleClear = () => {
+    setFormData(initialFormData);
+    setErrors({});
+  };
 
   return (
     <main className="app-shell">
@@ -118,17 +198,81 @@ function App() {
           <div className="section-heading">
             <div>
               <p>{project.domain}</p>
-              <h2>记录字段</h2>
+              <h2>病例录入</h2>
             </div>
-            <button className="primary-action">新增记录</button>
           </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
+          <div className="form-grid">
+            <label>
+              <span>牙位 <span className="required">*</span></span>
+              <input
+                placeholder="例如：#36、#11"
+                value={formData.toothPosition}
+                onChange={(e) => handleInputChange("toothPosition", e.target.value)}
+                className={errors.toothPosition ? "input-error" : ""}
+              />
+              {errors.toothPosition && <span className="error-text">{errors.toothPosition}</span>}
+            </label>
+            <label>
+              <span>诊断 <span className="required">*</span></span>
+              <input
+                placeholder="例如：慢性根尖周炎"
+                value={formData.diagnosis}
+                onChange={(e) => handleInputChange("diagnosis", e.target.value)}
+                className={errors.diagnosis ? "input-error" : ""}
+              />
+              {errors.diagnosis && <span className="error-text">{errors.diagnosis}</span>}
+            </label>
+            <label>
+              <span>当前步骤 <span className="required">*</span></span>
+              <select
+                value={formData.currentStep}
+                onChange={(e) => handleInputChange("currentStep", e.target.value)}
+                className={errors.currentStep ? "input-error" : ""}
+              >
+                <option value="">请选择步骤</option>
+                {steps.map(step => (
+                  <option key={step} value={step}>{step}</option>
+                ))}
+              </select>
+              {errors.currentStep && <span className="error-text">{errors.currentStep}</span>}
+            </label>
+            <label>
+              <span>工作长度</span>
+              <input
+                placeholder="例如：MB 19.5mm"
+                value={formData.workingLength}
+                onChange={(e) => handleInputChange("workingLength", e.target.value)}
+              />
+            </label>
+            <label>
+              <span>主尖锉号</span>
+              <input
+                placeholder="例如：#30"
+                value={formData.mainFileNumber}
+                onChange={(e) => handleInputChange("mainFileNumber", e.target.value)}
+              />
+            </label>
+            <label>
+              <span>封药情况</span>
+              <input
+                placeholder="例如：Ca(OH)2"
+                value={formData.medication}
+                onChange={(e) => handleInputChange("medication", e.target.value)}
+              />
+            </label>
+            <label className="full-width">
+              <span>备注</span>
+              <textarea
+                placeholder="其他需要记录的信息"
+                value={formData.remark}
+                onChange={(e) => handleInputChange("remark", e.target.value)}
+                rows={3}
+              />
+            </label>
+          </div>
+          <div className="form-actions">
+            <button type="button" onClick={handleClear} className="secondary-action">清空</button>
+            <button type="button" onClick={handleSubmit} className="primary-action">提交病例</button>
           </div>
         </section>
       </section>
@@ -142,8 +286,8 @@ function App() {
           <button>导出摘要</button>
         </div>
         <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
+          {records.map((record: string[], index: number) => (
+            <article key={record.join("-") + index} className="record-card">
               <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
               <div>
                 <h3>{record[0]}</h3>
