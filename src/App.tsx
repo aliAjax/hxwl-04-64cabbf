@@ -158,6 +158,10 @@ interface CaseRecord {
   mainFileNumber: string;
   medication: string;
   remark: string;
+  followUpDate: string;
+  followUpDoctor: string;
+  followUpReason: string;
+  followUpReminder: boolean;
 }
 
 interface FormErrors {
@@ -165,6 +169,30 @@ interface FormErrors {
   diagnosis?: string;
   currentStep?: string;
 }
+
+interface FollowUpPlan {
+  id: string;
+  toothPosition: string;
+  nextDate: string;
+  doctor: string;
+  reason: string;
+  reminderEnabled: boolean;
+}
+
+const initialFollowUpPlans: FollowUpPlan[] = [
+  { id: "fp1", toothPosition: "#36", nextDate: "2026-06-14", doctor: "张医生", reason: "Ca(OH)2封药到期，需换药或根充", reminderEnabled: true },
+  { id: "fp2", toothPosition: "#46", nextDate: "2026-06-18", doctor: "李医生", reason: "近中双根管继续测长", reminderEnabled: true },
+  { id: "fp3", toothPosition: "#14", nextDate: "2026-06-20", doctor: "张医生", reason: "开髓后继续根管预备", reminderEnabled: false },
+  { id: "fp4", toothPosition: "#25", nextDate: "2026-06-19", doctor: "王医生", reason: "根管预备完成后封药评估", reminderEnabled: true },
+  { id: "fp5", toothPosition: "#37", nextDate: "2026-06-15", doctor: "李医生", reason: "冲洗后封药观察", reminderEnabled: true },
+  { id: "fp6", toothPosition: "#16", nextDate: "2026-06-17", doctor: "张医生", reason: "开髓引流后复查", reminderEnabled: false },
+  { id: "fp7", toothPosition: "#26", nextDate: "2026-06-22", doctor: "王医生", reason: "Ca(OH)2封药一周后复诊", reminderEnabled: true },
+  { id: "fp8", toothPosition: "#31", nextDate: "2026-06-25", doctor: "李医生", reason: "测长后根管预备", reminderEnabled: false },
+  { id: "fp9", toothPosition: "#47", nextDate: "2026-06-16", doctor: "张医生", reason: "弯曲根管预备复诊", reminderEnabled: true },
+  { id: "fp10", toothPosition: "#15", nextDate: "2026-06-21", doctor: "王医生", reason: "冲洗后评估封药", reminderEnabled: true },
+  { id: "fp11", toothPosition: "#45", nextDate: "2026-06-19", doctor: "李医生", reason: "根管预备后封药观察", reminderEnabled: true },
+  { id: "fp12", toothPosition: "#24", nextDate: "2026-06-18", doctor: "张医生", reason: "局麻开髓后继续治疗", reminderEnabled: false },
+];
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
 
@@ -221,6 +249,10 @@ const initialFormData: CaseRecord = {
   mainFileNumber: "",
   medication: "",
   remark: "",
+  followUpDate: "",
+  followUpDoctor: "",
+  followUpReason: "",
+  followUpReminder: true,
 };
 
 function App() {
@@ -228,11 +260,26 @@ function App() {
   const [formData, setFormData] = useState<CaseRecord>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
   const [activeStage, setActiveStage] = useState<string | null>(null);
+  const [followUpPlans, setFollowUpPlans] = useState<FollowUpPlan[]>(initialFollowUpPlans);
+  const [sortAsc, setSortAsc] = useState<boolean>(true);
 
   const metricValues = calculateMetrics(records, activeStage);
   const filteredRecords = activeStage
     ? records.filter(r => r[2] === activeStage)
     : records;
+
+  const getDaysUntil = (dateStr: string): number => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(dateStr);
+    target.setHours(0, 0, 0, 0);
+    return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  };
+
+  const sortedPlans = [...followUpPlans].sort((a, b) => {
+    const diff = new Date(a.nextDate).getTime() - new Date(b.nextDate).getTime();
+    return sortAsc ? diff : -diff;
+  });
 
   const handleInputChange = (field: keyof CaseRecord, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -273,6 +320,19 @@ function App() {
     ];
 
     setRecords(prev => [newRecord, ...prev]);
+
+    if (formData.followUpDate) {
+      const newPlan: FollowUpPlan = {
+        id: `fp_${Date.now()}`,
+        toothPosition: formData.toothPosition,
+        nextDate: formData.followUpDate,
+        doctor: formData.followUpDoctor || "待分配",
+        reason: formData.followUpReason || `${formData.currentStep}后复诊`,
+        reminderEnabled: formData.followUpReminder,
+      };
+      setFollowUpPlans(prev => [newPlan, ...prev]);
+    }
+
     handleClear();
   };
 
@@ -405,6 +465,45 @@ function App() {
                 onChange={(e) => handleInputChange("medication", e.target.value)}
               />
             </label>
+            <label>
+              <span>复诊日期</span>
+              <input
+                type="date"
+                value={formData.followUpDate}
+                onChange={(e) => handleInputChange("followUpDate", e.target.value)}
+              />
+            </label>
+            <label>
+              <span>负责医生</span>
+              <input
+                placeholder="例如：张医生"
+                value={formData.followUpDoctor}
+                onChange={(e) => handleInputChange("followUpDoctor", e.target.value)}
+              />
+            </label>
+            <label>
+              <span>复诊原因</span>
+              <input
+                placeholder="例如：封药到期换药"
+                value={formData.followUpReason}
+                onChange={(e) => handleInputChange("followUpReason", e.target.value)}
+              />
+            </label>
+            <label className="checkbox-label">
+              <span>复诊提醒</span>
+              <div className="toggle-wrapper">
+                <input
+                  type="checkbox"
+                  checked={formData.followUpReminder}
+                  onChange={(e) => setFormData(prev => ({ ...prev, followUpReminder: e.target.checked }))}
+                  className="toggle-checkbox"
+                />
+                <span className="toggle-track">
+                  <span className="toggle-thumb" />
+                </span>
+                <span className="toggle-text">{formData.followUpReminder ? "已开启" : "已关闭"}</span>
+              </div>
+            </label>
             <label className="full-width">
               <span>备注</span>
               <textarea
@@ -455,6 +554,100 @@ function App() {
           ) : (
             <div className="empty-state">
               <p>该阶段暂无病例记录</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="followup-section panel">
+        <div className="section-heading">
+          <div>
+            <p>复诊管理</p>
+            <h2>
+              复诊计划
+              <span className="record-total">共 {followUpPlans.length} 条</span>
+            </h2>
+          </div>
+          <div className="followup-actions">
+            <button
+              className="secondary-action sort-btn"
+              onClick={() => setSortAsc(prev => !prev)}
+            >
+              {sortAsc ? "日期升序 ↑" : "日期降序 ↓"}
+            </button>
+          </div>
+        </div>
+        <div className="followup-summary">
+          <div className="followup-stat followup-stat--overdue">
+            <strong>{followUpPlans.filter(p => getDaysUntil(p.nextDate) < 0).length}</strong>
+            <span>已逾期</span>
+          </div>
+          <div className="followup-stat followup-stat--urgent">
+            <strong>{followUpPlans.filter(p => { const d = getDaysUntil(p.nextDate); return d >= 0 && d <= 3; }).length}</strong>
+            <span>3天内</span>
+          </div>
+          <div className="followup-stat followup-stat--upcoming">
+            <strong>{followUpPlans.filter(p => getDaysUntil(p.nextDate) > 3).length}</strong>
+            <span>后续</span>
+          </div>
+        </div>
+        <div className="followup-kanban">
+          {sortedPlans.length > 0 ? (
+            sortedPlans.map((plan) => {
+              const daysUntil = getDaysUntil(plan.nextDate);
+              let urgencyClass = "";
+              if (daysUntil < 0) urgencyClass = "followup-card--overdue";
+              else if (daysUntil <= 3) urgencyClass = "followup-card--urgent";
+              else urgencyClass = "followup-card--normal";
+
+              return (
+                <article key={plan.id} className={`followup-card ${urgencyClass}`}>
+                  <div className="followup-card-header">
+                    <h3>{plan.toothPosition}</h3>
+                    <div className="followup-badges">
+                      {daysUntil < 0 && (
+                        <span className="urgency-badge urgency-badge--overdue">
+                          逾期{Math.abs(daysUntil)}天
+                        </span>
+                      )}
+                      {daysUntil >= 0 && daysUntil <= 3 && (
+                        <span className="urgency-badge urgency-badge--urgent">
+                          {daysUntil === 0 ? "今日复诊" : `${daysUntil}天后`}
+                        </span>
+                      )}
+                      {daysUntil > 3 && (
+                        <span className="urgency-badge urgency-badge--upcoming">
+                          {daysUntil}天后
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="followup-card-body">
+                    <div className="followup-detail">
+                      <span className="followup-label">复诊日期</span>
+                      <span className="followup-value">{plan.nextDate}</span>
+                    </div>
+                    <div className="followup-detail">
+                      <span className="followup-label">负责医生</span>
+                      <span className="followup-value">{plan.doctor}</span>
+                    </div>
+                    <div className="followup-detail full-width">
+                      <span className="followup-label">复诊原因</span>
+                      <span className="followup-value">{plan.reason}</span>
+                    </div>
+                    <div className="followup-detail">
+                      <span className="followup-label">提醒状态</span>
+                      <span className={`followup-value ${plan.reminderEnabled ? "reminder-on" : "reminder-off"}`}>
+                        {plan.reminderEnabled ? "🔔 已开启" : "🔕 已关闭"}
+                      </span>
+                    </div>
+                  </div>
+                </article>
+              );
+            })
+          ) : (
+            <div className="empty-state">
+              <p>暂无复诊计划</p>
             </div>
           )}
         </div>
