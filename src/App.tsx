@@ -179,6 +179,32 @@ interface FollowUpPlan {
   reminderEnabled: boolean;
 }
 
+type ConfirmedStatus = "待确认" | "已确认" | "需重测";
+
+interface CanalEntry {
+  id: string;
+  canalName: string;
+  measuredLength: string;
+  referenceApex: string;
+  measurementMethod: string;
+  confirmedStatus: ConfirmedStatus;
+  isSupplementary: boolean;
+}
+
+interface WorkingLengthRecord {
+  id: string;
+  toothPosition: string;
+  entries: CanalEntry[];
+  note: string;
+}
+
+interface CanalDraft {
+  toothPosition: string;
+  entries: CanalEntry[];
+  note: string;
+  editingId: string | null;
+}
+
 const initialFollowUpPlans: FollowUpPlan[] = [
   { id: "fp1", toothPosition: "#36", nextDate: "2026-06-14", doctor: "张医生", reason: "Ca(OH)2封药到期，需换药或根充", reminderEnabled: true },
   { id: "fp2", toothPosition: "#46", nextDate: "2026-06-18", doctor: "李医生", reason: "近中双根管继续测长", reminderEnabled: true },
@@ -195,6 +221,89 @@ const initialFollowUpPlans: FollowUpPlan[] = [
 ];
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
+
+const referenceApexOptions = ["根尖孔", "牙本质牙骨质界", "解剖根尖孔", "根尖狭窄部"];
+const measurementMethodOptions = ["电测法", "X线估测法", "手感法", "纸尖法"];
+const confirmedStatusOptions: ConfirmedStatus[] = ["待确认", "已确认", "需重测"];
+const canalNameSuggestions = ["MB", "ML", "DB", "DL", "腭侧", "MB2", "ML2", "DB2", "颊侧", "舌侧", "近中", "远中", "单根管"];
+
+const confirmedStatusColors: Record<ConfirmedStatus, string> = {
+  "已确认": "#059669",
+  "待确认": "#ea580c",
+  "需重测": "#dc2626",
+};
+
+function createCanalId(): string {
+  return `c_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createEmptyCanalEntry(): CanalEntry {
+  return {
+    id: createCanalId(),
+    canalName: "",
+    measuredLength: "",
+    referenceApex: "根尖孔",
+    measurementMethod: "电测法",
+    confirmedStatus: "待确认",
+    isSupplementary: false,
+  };
+}
+
+const initialWorkingLengths: WorkingLengthRecord[] = [
+  {
+    id: "wl1",
+    toothPosition: "#36",
+    note: "近中双根管，电测法确认",
+    entries: [
+      { id: "c1", canalName: "MB", measuredLength: "19.5", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
+      { id: "c2", canalName: "ML", measuredLength: "18.5", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
+      { id: "c3", canalName: "DB", measuredLength: "20.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "待确认", isSupplementary: false },
+    ],
+  },
+  {
+    id: "wl2",
+    toothPosition: "#11",
+    note: "单根管，冷侧压完成",
+    entries: [
+      { id: "c4", canalName: "单根管", measuredLength: "23.0", referenceApex: "牙本质牙骨质界", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
+    ],
+  },
+  {
+    id: "wl3",
+    toothPosition: "#46",
+    note: "近中双根管需复诊测长",
+    entries: [
+      { id: "c5", canalName: "MB", measuredLength: "19.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "待确认", isSupplementary: false },
+      { id: "c6", canalName: "ML", measuredLength: "18.5", referenceApex: "根尖孔", measurementMethod: "手感法", confirmedStatus: "需重测", isSupplementary: false },
+    ],
+  },
+  {
+    id: "wl4",
+    toothPosition: "#25",
+    note: "MB2遗漏根管补录",
+    entries: [
+      { id: "c7", canalName: "MB", measuredLength: "18.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
+      { id: "c8", canalName: "MB2", measuredLength: "18.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: true },
+    ],
+  },
+  {
+    id: "wl5",
+    toothPosition: "#47",
+    note: "远中根弯曲",
+    entries: [
+      { id: "c9", canalName: "近中", measuredLength: "19.5", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
+      { id: "c10", canalName: "远中", measuredLength: "20.0", referenceApex: "根尖孔", measurementMethod: "X线估测法", confirmedStatus: "待确认", isSupplementary: false },
+    ],
+  },
+  {
+    id: "wl6",
+    toothPosition: "#31",
+    note: "根尖孔闭合",
+    entries: [
+      { id: "c11", canalName: "单根管", measuredLength: "17.0", referenceApex: "解剖根尖孔", measurementMethod: "手感法", confirmedStatus: "已确认", isSupplementary: false },
+    ],
+  },
+];
 
 const steps = ["开髓", "测长", "根管预备", "冲洗", "封药", "充填"];
 
@@ -262,6 +371,14 @@ function App() {
   const [activeStage, setActiveStage] = useState<string | null>(null);
   const [followUpPlans, setFollowUpPlans] = useState<FollowUpPlan[]>(initialFollowUpPlans);
   const [sortAsc, setSortAsc] = useState<boolean>(true);
+  const [workingLengths, setWorkingLengths] = useState<WorkingLengthRecord[]>(initialWorkingLengths);
+  const [canalDraft, setCanalDraft] = useState<CanalDraft>({
+    toothPosition: "",
+    entries: [],
+    note: "",
+    editingId: null,
+  });
+  const [canalDraftError, setCanalDraftError] = useState<string>("");
 
   const metricValues = calculateMetrics(records, activeStage);
   const filteredRecords = activeStage
@@ -339,6 +456,123 @@ function App() {
   const handleClear = () => {
     setFormData(initialFormData);
     setErrors({});
+  };
+
+  const canalStats = {
+    teeth: workingLengths.length,
+    canals: workingLengths.reduce((sum, w) => sum + w.entries.length, 0),
+    confirmed: workingLengths.reduce(
+      (sum, w) => sum + w.entries.filter(e => e.confirmedStatus === "已确认").length,
+      0
+    ),
+    supplementary: workingLengths.reduce(
+      (sum, w) => sum + w.entries.filter(e => e.isSupplementary).length,
+      0
+    ),
+  };
+
+  const findWorkingLength = (toothPosition: string): WorkingLengthRecord | undefined =>
+    workingLengths.find(w => w.toothPosition === toothPosition);
+
+  const summarizeCanal = (entry: CanalEntry): string => {
+    const lengthPart = entry.measuredLength ? `${entry.measuredLength}mm` : "未填";
+    const statusMark = entry.confirmedStatus === "已确认" ? "✓"
+      : entry.confirmedStatus === "需重测" ? "↻"
+      : "…";
+    return `${entry.canalName || "未命名"} ${lengthPart}${statusMark}`;
+  };
+
+  const addCanalEntry = () => {
+    setCanalDraft(prev => ({ ...prev, entries: [...prev.entries, createEmptyCanalEntry()] }));
+    setCanalDraftError("");
+  };
+
+  const updateCanalEntry = (id: string, field: keyof CanalEntry, value: string | boolean) => {
+    setCanalDraft(prev => ({
+      ...prev,
+      entries: prev.entries.map(entry =>
+        entry.id === id ? { ...entry, [field]: value } as CanalEntry : entry
+      ),
+    }));
+  };
+
+  const removeCanalEntry = (id: string) => {
+    setCanalDraft(prev => ({ ...prev, entries: prev.entries.filter(entry => entry.id !== id) }));
+  };
+
+  const resetCanalDraft = () => {
+    setCanalDraft({ toothPosition: "", entries: [], note: "", editingId: null });
+    setCanalDraftError("");
+  };
+
+  const handleCanalDraftChange = (field: keyof CanalDraft, value: string) => {
+    setCanalDraft(prev => ({ ...prev, [field]: value }));
+    if (canalDraftError) setCanalDraftError("");
+  };
+
+  const loadWorkingLengthForEdit = (record: WorkingLengthRecord) => {
+    setCanalDraft({
+      toothPosition: record.toothPosition,
+      entries: record.entries.map(entry => ({ ...entry })),
+      note: record.note,
+      editingId: record.id,
+    });
+    setCanalDraftError("");
+  };
+
+  const saveCanalDraft = () => {
+    if (!canalDraft.toothPosition.trim()) {
+      setCanalDraftError("请填写牙位");
+      return;
+    }
+    const validEntries = canalDraft.entries.filter(e => e.canalName.trim());
+    if (validEntries.length === 0) {
+      setCanalDraftError("请至少添加一条带名称的根管明细");
+      return;
+    }
+    const conflict = workingLengths.find(
+      w => w.toothPosition === canalDraft.toothPosition.trim() && w.id !== canalDraft.editingId
+    );
+    if (conflict) {
+      setCanalDraftError(`牙位 ${canalDraft.toothPosition.trim()} 已存在工作长度记录，请编辑原记录`);
+      return;
+    }
+
+    if (canalDraft.editingId) {
+      setWorkingLengths(prev => prev.map(w =>
+        w.id === canalDraft.editingId
+          ? {
+              ...w,
+              toothPosition: canalDraft.toothPosition.trim(),
+              entries: validEntries,
+              note: canalDraft.note,
+            }
+          : w
+      ));
+    } else {
+      const newRecord: WorkingLengthRecord = {
+        id: `wl_${Date.now()}`,
+        toothPosition: canalDraft.toothPosition.trim(),
+        entries: validEntries,
+        note: canalDraft.note,
+      };
+      setWorkingLengths(prev => [newRecord, ...prev]);
+    }
+    resetCanalDraft();
+  };
+
+  const deleteWorkingLength = (id: string) => {
+    setWorkingLengths(prev => prev.filter(w => w.id !== id));
+    if (canalDraft.editingId === id) resetCanalDraft();
+  };
+
+  const toggleCanalSupplementary = (id: string) => {
+    setCanalDraft(prev => ({
+      ...prev,
+      entries: prev.entries.map(entry =>
+        entry.id === id ? { ...entry, isSupplementary: !entry.isSupplementary } : entry
+      ),
+    }));
   };
 
   return (
@@ -534,26 +768,315 @@ function App() {
         </div>
         <div className="record-list">
           {filteredRecords.length > 0 ? (
-            filteredRecords.map((record: string[], index: number) => (
-              <article key={record.join("-") + index} className="record-card">
-                <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-                <div className="record-content">
-                  <div className="record-header">
-                    <h3>{record[0]}</h3>
-                    <span
-                      className="stage-badge"
-                      style={{ backgroundColor: stageColors[record[2]] }}
-                    >
-                      {record[2]}
-                    </span>
+            filteredRecords.map((record: string[], index: number) => {
+              const wlRecord = findWorkingLength(record[0]);
+              const confirmedCount = wlRecord
+                ? wlRecord.entries.filter(e => e.confirmedStatus === "已确认").length
+                : 0;
+              return (
+                <article key={record.join("-") + index} className="record-card">
+                  <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
+                  <div className="record-content">
+                    <div className="record-header">
+                      <h3>{record[0]}</h3>
+                      <span
+                        className="stage-badge"
+                        style={{ backgroundColor: stageColors[record[2]] }}
+                      >
+                        {record[2]}
+                      </span>
+                    </div>
+                    <p>{record.slice(1, 4).join(" · ")}</p>
+                    {wlRecord && wlRecord.entries.length > 0 && (
+                      <div className="wl-summary">
+                        <span className="wl-summary-label">
+                          工作长度<span className="wl-count">{wlRecord.entries.length}根管</span>
+                        </span>
+                        <div className="wl-summary-chips">
+                          {wlRecord.entries.map(entry => (
+                            <span
+                              key={entry.id}
+                              className="wl-chip"
+                              style={{ borderColor: confirmedStatusColors[entry.confirmedStatus] }}
+                              title={`${entry.referenceApex} · ${entry.measurementMethod}${entry.isSupplementary ? " · 遗漏根管补录" : ""}`}
+                            >
+                              <span className="wl-chip-name">{entry.canalName}</span>
+                              <span className="wl-chip-length">
+                                {entry.measuredLength ? `${entry.measuredLength}mm` : "未填"}
+                              </span>
+                              <span
+                                className="wl-chip-status"
+                                style={{ color: confirmedStatusColors[entry.confirmedStatus] }}
+                              >
+                                {entry.confirmedStatus === "已确认" ? "✓"
+                                  : entry.confirmedStatus === "需重测" ? "↻"
+                                  : "…"}
+                              </span>
+                              {entry.isSupplementary && <span className="wl-chip-supplement">补</span>}
+                            </span>
+                          ))}
+                        </div>
+                        <span className="wl-summary-meta">
+                          已确认 {confirmedCount}/{wlRecord.entries.length}
+                          {wlRecord.entries.some(e => e.isSupplementary) ? " · 含补录根管" : ""}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  <p>{record.slice(1, 4).join(" · ")}</p>
-                </div>
-              </article>
-            ))
+                </article>
+              );
+            })
           ) : (
             <div className="empty-state">
               <p>该阶段暂无病例记录</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="wl-section panel">
+        <div className="section-heading">
+          <div>
+            <p>根管工作长度管理</p>
+            <h2>
+              工作长度录入
+              <span className="record-total">
+                共 {canalStats.teeth} 牙位 · {canalStats.canals} 根管
+              </span>
+            </h2>
+          </div>
+        </div>
+
+        <div className="wl-stats">
+          <div className="wl-stat">
+            <strong>{canalStats.teeth}</strong>
+            <span>覆盖牙位</span>
+          </div>
+          <div className="wl-stat wl-stat--confirmed">
+            <strong>{canalStats.confirmed}/{canalStats.canals}</strong>
+            <span>已确认根管</span>
+          </div>
+          <div className="wl-stat wl-stat--supplement">
+            <strong>{canalStats.supplementary}</strong>
+            <span>遗漏根管补录</span>
+          </div>
+        </div>
+
+        <datalist id="canalNameSuggestions">
+          {canalNameSuggestions.map(name => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+
+        <div className="wl-form">
+          <div className="wl-form-header">
+            <label className="wl-tooth-input">
+              <span>牙位 <span className="required">*</span></span>
+              <input
+                placeholder="例如：#36"
+                value={canalDraft.toothPosition}
+                onChange={(e) => handleCanalDraftChange("toothPosition", e.target.value)}
+              />
+            </label>
+            <span className="wl-form-hint">
+              支持单根管、多根管及遗漏根管补录，同一牙位可录入多条根管明细
+            </span>
+          </div>
+
+          <div className="wl-entry-header">
+            <h3>根管明细</h3>
+            <button type="button" className="secondary-action wl-add-btn" onClick={addCanalEntry}>
+              + 添加根管
+            </button>
+          </div>
+
+          <div className="wl-entry-list">
+            {canalDraft.entries.length > 0 ? (
+              canalDraft.entries.map((entry, entryIndex) => (
+                <div key={entry.id} className="wl-entry-row">
+                  <div className="wl-entry-index">{entryIndex + 1}</div>
+                  <div className="wl-entry-fields">
+                    <label>
+                      <span>根管名称</span>
+                      <input
+                        list="canalNameSuggestions"
+                        placeholder="例如：MB"
+                        value={entry.canalName}
+                        onChange={(e) => updateCanalEntry(entry.id, "canalName", e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>测量长度(mm)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        placeholder="19.5"
+                        value={entry.measuredLength}
+                        onChange={(e) => updateCanalEntry(entry.id, "measuredLength", e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>参考尖点</span>
+                      <select
+                        value={entry.referenceApex}
+                        onChange={(e) => updateCanalEntry(entry.id, "referenceApex", e.target.value)}
+                      >
+                        {referenceApexOptions.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>测长方式</span>
+                      <select
+                        value={entry.measurementMethod}
+                        onChange={(e) => updateCanalEntry(entry.id, "measurementMethod", e.target.value)}
+                      >
+                        {measurementMethodOptions.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>确认状态</span>
+                      <select
+                        value={entry.confirmedStatus}
+                        onChange={(e) => updateCanalEntry(entry.id, "confirmedStatus", e.target.value)}
+                      >
+                        {confirmedStatusOptions.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="wl-supplement-label">
+                      <span>遗漏根管补录</span>
+                      <div className="toggle-wrapper">
+                        <input
+                          type="checkbox"
+                          className="toggle-checkbox"
+                          checked={entry.isSupplementary}
+                          onChange={() => toggleCanalSupplementary(entry.id)}
+                        />
+                        <span className="toggle-track">
+                          <span className="toggle-thumb" />
+                        </span>
+                        <span className="toggle-text">
+                          {entry.isSupplementary ? "已标记补录" : "常规根管"}
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="wl-entry-remove"
+                    onClick={() => removeCanalEntry(entry.id)}
+                    title="删除该根管"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="wl-entry-empty">
+                <p>暂无根管明细，点击「添加根管」开始录入（支持单根管或多根管）</p>
+              </div>
+            )}
+          </div>
+
+          <label className="wl-note-label full-width">
+            <span>备注</span>
+            <textarea
+              placeholder="例如：MB2为遗漏根管补录，电测法与X线片复核"
+              value={canalDraft.note}
+              onChange={(e) => handleCanalDraftChange("note", e.target.value)}
+              rows={2}
+            />
+          </label>
+
+          {canalDraftError && <p className="error-text wl-form-error">{canalDraftError}</p>}
+
+          <div className="form-actions wl-form-actions">
+            {canalDraft.editingId && (
+              <span className="wl-editing-tag">正在编辑：{canalDraft.toothPosition}</span>
+            )}
+            <button type="button" className="secondary-action" onClick={resetCanalDraft}>
+              取消
+            </button>
+            <button type="button" className="primary-action" onClick={saveCanalDraft}>
+              {canalDraft.editingId ? "更新工作长度" : "保存工作长度"}
+            </button>
+          </div>
+        </div>
+
+        <div className="wl-saved-header">
+          <h3>已保存的工作长度记录</h3>
+        </div>
+        <div className="wl-saved-list">
+          {workingLengths.length > 0 ? (
+            workingLengths.map(wl => {
+              const confirmed = wl.entries.filter(e => e.confirmedStatus === "已确认").length;
+              return (
+                <article key={wl.id} className="wl-saved-card">
+                  <div className="wl-saved-top">
+                    <div className="wl-saved-title">
+                      <h4>{wl.toothPosition}</h4>
+                      <span className="wl-saved-count">{wl.entries.length}根管</span>
+                      <span className="wl-saved-confirmed">
+                        已确认 {confirmed}/{wl.entries.length}
+                      </span>
+                      {wl.entries.some(e => e.isSupplementary) && (
+                        <span className="wl-saved-supplement">含补录</span>
+                      )}
+                    </div>
+                    <div className="wl-saved-actions">
+                      <button
+                        type="button"
+                        className="secondary-action wl-action-btn"
+                        onClick={() => loadWorkingLengthForEdit(wl)}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-action wl-action-btn wl-action-remove"
+                        onClick={() => deleteWorkingLength(wl.id)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                  <div className="wl-saved-chips">
+                    {wl.entries.map(entry => (
+                      <span
+                        key={entry.id}
+                        className="wl-saved-chip"
+                        style={{ borderColor: confirmedStatusColors[entry.confirmedStatus] }}
+                        title={`${entry.referenceApex} · ${entry.measurementMethod}${entry.isSupplementary ? " · 遗漏根管补录" : ""}`}
+                      >
+                        <span className="wl-chip-name">{entry.canalName || "未命名"}</span>
+                        <span className="wl-chip-length">
+                          {entry.measuredLength ? `${entry.measuredLength}mm` : "未填"}
+                        </span>
+                        <span
+                          className="wl-chip-status"
+                          style={{ color: confirmedStatusColors[entry.confirmedStatus] }}
+                        >
+                          {entry.confirmedStatus === "已确认" ? "✓"
+                            : entry.confirmedStatus === "需重测" ? "↻"
+                            : "…"}
+                        </span>
+                        {entry.isSupplementary && <span className="wl-chip-supplement">补</span>}
+                      </span>
+                    ))}
+                  </div>
+                  {wl.note && <p className="wl-saved-note">{wl.note}</p>}
+                </article>
+              );
+            })
+          ) : (
+            <div className="empty-state">
+              <p>暂无工作长度记录，请在上方录入根管明细后保存</p>
             </div>
           )}
         </div>
