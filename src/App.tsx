@@ -311,13 +311,14 @@ function App() {
     (async () => {
       try {
         const data = await initDB();
-        setRecords(data.records);
-        setCaseInfos(data.caseInfos || []);
-        setOperationLogs(data.operationLogs || []);
-        setFollowUpPlans(data.followUpPlans);
-        setWorkingLengths(data.workingLengths);
-        setTimelines(data.timelines);
-        setActiveStage(data.activeStage);
+        const migrated = migrateLegacyData(data);
+        setRecords(migrated.records);
+        setCaseInfos(migrated.caseInfos || []);
+        setOperationLogs(migrated.operationLogs || []);
+        setFollowUpPlans(migrated.followUpPlans);
+        setWorkingLengths(migrated.workingLengths);
+        setTimelines(migrated.timelines);
+        setActiveStage(migrated.activeStage);
         isInitialized.current = true;
         isPersistEnabled.current = true;
       } catch (err) {
@@ -327,6 +328,107 @@ function App() {
       }
     })();
   }, []);
+
+  function migrateLegacyData(data: AppData): AppData {
+    const records = data.records || [];
+    if (records.length === 0) return data;
+
+    const hasNewStructure = records.every(r => r.length >= 6);
+    if (hasNewStructure) return data;
+
+    const oldRecords = records as string[][];
+    const toothToCaseId: Record<string, string> = {};
+    const today = new Date().toISOString().split("T")[0];
+
+    const newRecords: string[][] = oldRecords.map(r => {
+      if (r.length >= 6) return r;
+      const [toothPosition, diagnosis, currentStep, detail] = r;
+      const caseId = createCaseIdExternal();
+      toothToCaseId[toothPosition] = caseId;
+      const status = currentStep === "充填" ? "已充填" : "待复诊";
+      return [caseId, toothPosition, diagnosis || "", currentStep || "开髓", detail || "", status];
+    });
+
+    let caseInfos = data.caseInfos || [];
+    const followUpPlans = (data.followUpPlans || []).map(p => {
+      const caseId = p.caseId || toothToCaseId[p.toothPosition] || createCaseIdExternal();
+      if (p.toothPosition && !toothToCaseId[p.toothPosition]) {
+        toothToCaseId[p.toothPosition] = caseId;
+      }
+      return { ...p, caseId };
+    });
+
+    const workingLengths = (data.workingLengths || []).map(w => ({
+      ...w,
+      caseId: w.caseId || toothToCaseId[w.toothPosition] || createCaseIdExternal(),
+    }));
+
+    const timelines = (data.timelines || []).map(t => ({
+      ...t,
+      caseId: t.caseId || toothToCaseId[t.toothPosition] || createCaseIdExternal(),
+    }));
+
+    if (caseInfos.length === 0) {
+      caseInfos = newRecords.map((r) => {
+        const caseId = r[0];
+        const toothPosition = r[1];
+        const diagnosis = r[2];
+        const currentStep = r[3] as TreatmentStep;
+        const followUp = followUpPlans.find(p => p.toothPosition === toothPosition);
+        const wlMatch = (r[4] || "").match(/工作长度\s*([^，,]+)/);
+        const mainMatch = (r[4] || "").match(/主尖锉\s*#?([0-9]+)/);
+        const medMatch = (r[4] || "").match(/封药[：:]\s*([^，,]+)/);
+        const info: CaseBasicInfo = {
+          id: caseId,
+          toothPosition,
+          patientName: followUp?.patientName || "",
+          phone: followUp?.phone || "",
+          diagnosis,
+          currentStep,
+          workingLength: wlMatch ? wlMatch[1] : "",
+          mainFileNumber: mainMatch ? mainMatch[1] : "",
+          medication: medMatch ? medMatch[1] : "",
+          remark: r[4] || "",
+          createdAt: today,
+          updatedAt: today,
+        };
+        return info;
+      });
+    }
+
+    const existingIds = new Set(caseInfos.map(c => c.id));
+    for (const r of newRecords) {
+      const caseId = r[0];
+      if (!existingIds.has(caseId)) {
+        const toothPosition = r[1];
+        const followUp = followUpPlans.find(p => p.toothPosition === toothPosition);
+        const info: CaseBasicInfo = {
+          id: caseId,
+          toothPosition,
+          patientName: followUp?.patientName || "",
+          phone: followUp?.phone || "",
+          diagnosis: r[2],
+          currentStep: (r[3] as TreatmentStep) || "开髓",
+          workingLength: "",
+          mainFileNumber: "",
+          medication: "",
+          remark: r[4] || "",
+          createdAt: today,
+          updatedAt: today,
+        };
+        caseInfos.push(info);
+      }
+    }
+
+    return {
+      ...data,
+      records: newRecords,
+      caseInfos,
+      followUpPlans,
+      workingLengths,
+      timelines,
+    };
+  }
 
   useEffect(() => {
     if (!isPersistEnabled.current) return;
@@ -767,6 +869,18 @@ function App() {
       return r;
     }));
 
+    setFollowUpPlans(prev => prev.map(p => {
+      if (p.caseId === selectedCaseId || p.toothPosition === updatedInfo.toothPosition) {
+        return {
+          ...p,
+          caseId: selectedCaseId,
+          patientName: updatedInfo.patientName || p.patientName,
+          toothPosition: updatedInfo.toothPosition,
+        };
+      }
+      return p;
+    }));
+
     addOperationLog(selectedCaseId, "更新基础信息", `更新患者信息：${updatedInfo.patientName || "未命名"}，牙位：${updatedInfo.toothPosition}，当前阶段：${updatedInfo.currentStep}`);
 
     setIsEditingBasicInfo(false);
@@ -1108,7 +1222,7 @@ function App() {
                 <span>已确认复诊</span>
               </div>
               <div className="doctor-summary-item">
-                <strong>{records.filter(r => r[2] === "充填").length}</strong>
+                <strong>{records.filter(r => r[3] === "充填").length}</strong>
                 <span>已完成充填</span>
               </div>
             </div>
