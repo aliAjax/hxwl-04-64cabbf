@@ -557,8 +557,8 @@ function App() {
     ];
 
     const receptionFields = [
-      { field: "patientName", getValue: (c: CaseBasicInfo) => c.patientName || "新患者" },
-      { field: "phone", getValue: (c: CaseBasicInfo) => c.phone || "138****0000" },
+      { field: "patientName", getValue: (c: CaseBasicInfo) => c.patientName + "（已核实）" },
+      { field: "phone", getValue: (c: CaseBasicInfo) => c.phone ? c.phone.replace(/\d{4}$/, "9999") : "138****9999" },
     ];
 
     const getFieldsForRole = (role: UserRole) => {
@@ -589,6 +589,7 @@ function App() {
           const fieldDef = fields[Math.floor(Math.random() * fields.length)];
           const remoteValue = fieldDef.getValue(caseInfo);
           const localChange = localPending.find(c => c.field === fieldDef.field);
+          const currentValue = String(caseInfo[fieldDef.field as keyof CaseBasicInfo] || "");
 
           if (localChange && localChange.newValue !== remoteValue && localChange.changedBy !== simRole) {
             newConflicts.push({
@@ -604,12 +605,12 @@ function App() {
               resolved: false,
             });
             hasConflict = true;
-          } else if (!localChange) {
+          } else if (!localChange && remoteValue !== currentValue) {
             newChanges.push({
               id: `fc_remote_${Date.now()}_${idx}_${roleIdx}`,
               caseId,
               field: fieldDef.field,
-              oldValue: String(caseInfo[fieldDef.field as keyof CaseBasicInfo] || ""),
+              oldValue: currentValue,
               newValue: remoteValue,
               changedBy: simRole,
               changedAt: now,
@@ -697,6 +698,7 @@ function App() {
     if (!conflict) return;
 
     const resolvedValue = choice === "local" ? conflict.localValue : conflict.remoteValue;
+    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 
     setConflicts(prev => prev.map(c =>
       c.id === conflictId
@@ -704,23 +706,24 @@ function App() {
             ...c,
             resolved: true,
             resolvedValue,
-            resolvedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+            resolvedAt: now,
             resolvedBy: currentRole,
           }
         : c
     ));
 
-    if (conflict.field === "workingLength" || conflict.field === "medication" || conflict.field === "remark" ||
-        conflict.field === "diagnosis" || conflict.field === "currentStep" || conflict.field === "patientName" || conflict.field === "phone") {
+    const caseInfoFields = ["toothPosition", "patientName", "phone", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
+    if (caseInfoFields.includes(conflict.field)) {
       setCaseInfos(prev => prev.map(c => {
         if (c.id === conflict.caseId) {
-          return { ...c, [conflict.field]: resolvedValue, updatedAt: new Date().toISOString().split("T")[0] };
+          return { ...c, [conflict.field]: resolvedValue, updatedAt: now.split(" ")[0] };
         }
         return c;
       }));
     }
 
-    if (conflict.field === "contactStatus" || conflict.field === "nextDate" || conflict.field === "doctor" || conflict.field === "reason") {
+    const followUpFields = ["contactStatus", "nextDate", "doctor", "reason", "contactNote", "patientName", "phone"];
+    if (followUpFields.includes(conflict.field)) {
       setFollowUpPlans(prev => prev.map(p => {
         if (p.caseId === conflict.caseId) {
           return { ...p, [conflict.field]: resolvedValue } as FollowUpPlan;
@@ -736,7 +739,7 @@ function App() {
       return c;
     }));
 
-    addOperationLog(conflict.caseId, "更新基础信息", `冲突解决：${conflict.field} 保留${choice === "local" ? "本地" : "远端"}版本「${resolvedValue}」`);
+    addOperationLog(conflict.caseId, "更新基础信息", `冲突解决：${getFieldLabel(conflict.field)} 保留${choice === "local" ? "本地" : "远端"}版本「${resolvedValue}」`);
   };
 
   const toggleSyncStatus = () => {
