@@ -315,6 +315,7 @@ function App() {
   const [simulatingSync, setSimulatingSync] = useState<boolean>(false);
   const [changeQueueFilter, setChangeQueueFilter] = useState<"all" | "pending" | "synced" | "conflict">("all");
   const [changeQueueRoleFilter, setChangeQueueRoleFilter] = useState<string>("all");
+  const [searchKeyword, setSearchKeyword] = useState<string>("");
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -802,10 +803,28 @@ function App() {
     }
   };
 
-  const metricValues = calculateMetrics(records, activeStage);
-  const filteredRecords = activeStage
+  const stageFilteredRecords = activeStage
     ? records.filter(r => r[3] === activeStage)
     : records;
+
+  const filteredRecords = searchKeyword.trim()
+    ? stageFilteredRecords.filter(r => {
+        const caseId = r[0];
+        const toothPosition = r[1];
+        const diagnosis = r[2];
+        const caseInfo = findCaseInfoById(caseId);
+        const followUp = findFollowUpByCaseId(caseId);
+        const patientName = (caseInfo?.patientName || followUp?.patientName || "").toLowerCase();
+        const keyword = searchKeyword.trim().toLowerCase();
+        return (
+          patientName.includes(keyword) ||
+          toothPosition.toLowerCase().includes(keyword) ||
+          diagnosis.toLowerCase().includes(keyword)
+        );
+      })
+    : stageFilteredRecords;
+
+  const metricValues = calculateMetrics(filteredRecords, null);
 
   const getDaysUntil = (dateStr: string): number => {
     const today = new Date();
@@ -1311,18 +1330,20 @@ function App() {
   };
 
   const getFilterLabel = (): string => {
-    if (activeStage) {
-      return `${activeStage}阶段`;
+    const stageLabel = activeStage ? `${activeStage}阶段` : "全部病例";
+    if (searchKeyword.trim()) {
+      return `${stageLabel} · 搜索「${searchKeyword.trim()}」`;
     }
-    return "全部病例";
+    return stageLabel;
   };
 
   const handleExportCSV = () => {
     const summaries = buildCaseSummaries(filteredRecords, followUpPlans, workingLengths);
     const csvContent = generateCSV(summaries);
     const dateStr = new Date().toISOString().split("T")[0];
-    const filterName = activeStage || "全部";
-    const filename = `根管治疗病例摘要_${filterName}_${dateStr}.csv`;
+    const filterPart = activeStage ? activeStage : "全部";
+    const searchPart = searchKeyword.trim() ? `_搜索${searchKeyword.trim()}` : "";
+    const filename = `根管治疗病例摘要_${filterPart}${searchPart}_${dateStr}.csv`;
     downloadCSV(csvContent, filename);
     setShowExportModal(false);
   };
@@ -1633,26 +1654,58 @@ function App() {
         </section>
       )}
 
-      <section className="stage-tabs">
-        <button
-          className={`stage-tab ${activeStage === null ? 'active' : ''}`}
-          onClick={() => setActiveStage(null)}
-        >
-          全部
-        </button>
-        {steps.map((stage) => (
+      <section className="stage-tabs-wrapper">
+        <div className="stage-tabs">
           <button
-            key={stage}
-            className={`stage-tab ${activeStage === stage ? 'active' : ''}`}
-            style={activeStage === stage ? { '--stage-color': stageColors[stage] } as React.CSSProperties : {}}
-            onClick={() => setActiveStage(stage)}
+            className={`stage-tab ${activeStage === null ? 'active' : ''}`}
+            onClick={() => setActiveStage(null)}
           >
-            {stage}
-            <span className="stage-count">
-              {records.filter(r => r[3] === stage).length}
-            </span>
+            全部
           </button>
-        ))}
+          {steps.map((stage) => (
+            <button
+              key={stage}
+              className={`stage-tab ${activeStage === stage ? 'active' : ''}`}
+              style={activeStage === stage ? { '--stage-color': stageColors[stage] } as React.CSSProperties : {}}
+              onClick={() => setActiveStage(stage)}
+            >
+              {stage}
+              <span className="stage-count">
+                {records.filter(r => r[3] === stage).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="search-box-wrapper">
+          <div className="search-box">
+            <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input
+              type="text"
+              className="search-input"
+              placeholder="搜索患者姓名、牙位、诊断关键词..."
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+            />
+            {searchKeyword && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => setSearchKeyword("")}
+                title="清空搜索"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {searchKeyword && (
+            <span className="search-result-info">
+              匹配 {filteredRecords.length} 条
+            </span>
+          )}
+        </div>
       </section>
 
       <section className="workspace">

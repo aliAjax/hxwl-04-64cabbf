@@ -394,6 +394,96 @@ input {
   color: #475569;
 }
 
+.stage-tabs-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.stage-tabs-wrapper .stage-tabs {
+  margin-bottom: 0;
+}
+
+.search-box-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 420px;
+  min-width: 240px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  width: 18px;
+  height: 18px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  padding: 10px 36px 10px 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #ffffff;
+  font-size: 14px;
+  color: #1f2937;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: #94a3b8;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent);
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: #e2e8f0;
+  border-radius: 50%;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.search-clear-btn:hover {
+  background: #cbd5e1;
+  color: #475569;
+}
+
+.search-result-info {
+  font-size: 13px;
+  color: var(--primary);
+  font-weight: 500;
+  background: color-mix(in srgb, var(--primary) 10%, #ffffff);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
 .stage-badge {
   display: inline-block;
   padding: 3px 10px;
@@ -736,11 +826,15 @@ input {
 }
 
 @media (max-width: 860px) {
-  .stage-tabs {
+  .stage-tabs-wrapper .stage-tabs {
     margin-left: -4px;
     padding-left: 4px;
     margin-right: -4px;
     padding-right: 4px;
+  }
+
+  .search-box {
+    max-width: 100%;
   }
 
   .followup-kanban {
