@@ -263,7 +263,7 @@ interface FollowUpEditDraft {
   plan: FollowUpPlan | null;
 }
 
-type CaseDetailTab = "basic" | "canal" | "timeline" | "followup" | "logs";
+type CaseDetailTab = "basic" | "canal" | "timeline" | "followup" | "logs" | "summary";
 
 function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>("医生");
@@ -1110,7 +1110,7 @@ function App() {
       getOrCreateTimeline(toothPosition, caseId || undefined);
       setSelectedCaseId(caseId);
       setSelectedToothPosition(toothPosition);
-      setActiveCaseTab("basic");
+      setActiveCaseTab("summary");
       setIsEditingBasicInfo(false);
       setBasicInfoDraft(null);
       setShowDetailModal(true);
@@ -2662,6 +2662,7 @@ function App() {
 
             <div className="case-tabs">
               {([
+                { key: "summary", label: "临床摘要", icon: "📊" },
                 { key: "basic", label: "基础信息", icon: "📋" },
                 { key: "canal", label: "根管参数", icon: "🦷" },
                 { key: "timeline", label: "治疗时间线", icon: "📅" },
@@ -2680,6 +2681,243 @@ function App() {
             </div>
 
             <div className="case-tab-content">
+              {activeCaseTab === "summary" && (() => {
+                const caseInfo = findCaseInfoById(selectedCaseId);
+                const record = findRecordByCaseId(selectedCaseId);
+                const wlRecord = findWorkingLength(selectedToothPosition) || findWorkingLengthByCaseId(selectedCaseId);
+                const timeline = findTimeline(selectedToothPosition);
+                const followUp = findFollowUpByCaseId(selectedCaseId);
+                const caseConflicts = conflicts.filter(c => c.caseId === selectedCaseId && !c.resolved);
+
+                const diagnosis = caseInfo?.diagnosis || record?.[2] || "-";
+                const currentStep = caseInfo?.currentStep || record?.[3] || "开髓";
+                const medication = caseInfo?.medication || "-";
+
+                const completedSteps = timeline ? timeline.nodes.filter(n => n.isCompleted).length : 0;
+                const totalSteps = timeline?.nodes.length || 6;
+                const currentStepIdx = timeline ? getCurrentStepIndex(timeline.nodes) : 0;
+
+                const confirmedCanals = wlRecord ? wlRecord.entries.filter(e => e.confirmedStatus === "已确认") : [];
+                const retestCanals = wlRecord ? wlRecord.entries.filter(e => e.confirmedStatus === "需重测") : [];
+
+                const nextFollowUpDate = followUp?.nextDate || "-";
+                const followUpDoctor = followUp?.doctor || "-";
+                const followUpReason = followUp?.reason || "-";
+                const daysUntil = followUp ? getDaysUntil(followUp.nextDate) : null;
+
+                return (
+                  <div className="case-section">
+                    <div className="case-section-header">
+                      <h3>临床摘要</h3>
+                    </div>
+
+                    <div className="summary-grid">
+                      <div className="summary-card summary-card--primary">
+                        <div className="summary-card-header">
+                          <span className="summary-card-icon">🏥</span>
+                          <h4>诊断</h4>
+                        </div>
+                        <p className="summary-card-value">{diagnosis}</p>
+                      </div>
+
+                      <div className="summary-card">
+                        <div className="summary-card-header">
+                          <span className="summary-card-icon">📈</span>
+                          <h4>治疗进度</h4>
+                        </div>
+                        <div className="summary-progress">
+                          <div className="summary-progress-bar">
+                            <div
+                              className="summary-progress-fill"
+                              style={{
+                                width: `${(completedSteps / totalSteps) * 100}%`,
+                                backgroundColor: stageColors[currentStep as TreatmentStep] || stageColors["开髓"],
+                              }}
+                            />
+                          </div>
+                          <div className="summary-progress-info">
+                            <span className="summary-progress-text">
+                              已完成 {completedSteps}/{totalSteps} 步
+                            </span>
+                            <span
+                              className="summary-progress-step"
+                              style={{
+                                backgroundColor: (stageColors[currentStep as TreatmentStep] || stageColors["开髓"]) + "15",
+                                color: stageColors[currentStep as TreatmentStep] || stageColors["开髓"],
+                              }}
+                            >
+                              当前：{currentStep}
+                            </span>
+                          </div>
+                          <div className="summary-progress-track">
+                            {timeline?.nodes.map((node, idx) => (
+                              <div
+                                key={node.id}
+                                className={`summary-progress-dot ${
+                                  idx < currentStepIdx
+                                    ? "summary-progress-dot--done"
+                                    : idx === currentStepIdx
+                                    ? "summary-progress-dot--current"
+                                    : "summary-progress-dot--pending"
+                                }`}
+                                style={{
+                                  "--stage-color":
+                                    idx < currentStepIdx || idx === currentStepIdx
+                                      ? stageColors[node.step]
+                                      : undefined,
+                                } as React.CSSProperties}
+                                title={node.step}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="summary-card">
+                        <div className="summary-card-header">
+                          <span className="summary-card-icon">✅</span>
+                          <h4>已确认根管</h4>
+                        </div>
+                        {confirmedCanals.length > 0 ? (
+                          <div className="summary-canal-list">
+                            {confirmedCanals.map(canal => (
+                              <span key={canal.id} className="summary-canal-chip summary-canal-chip--confirmed">
+                                <span className="summary-canal-name">{canal.canalName}</span>
+                                <span className="summary-canal-length">{canal.measuredLength}mm</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="summary-card-empty">暂无已确认根管</p>
+                        )}
+                      </div>
+
+                      <div className="summary-card summary-card--warning">
+                        <div className="summary-card-header">
+                          <span className="summary-card-icon">⚠️</span>
+                          <h4>需重测根管</h4>
+                        </div>
+                        {retestCanals.length > 0 ? (
+                          <div className="summary-canal-list">
+                            {retestCanals.map(canal => (
+                              <span key={canal.id} className="summary-canal-chip summary-canal-chip--retest">
+                                <span className="summary-canal-name">{canal.canalName}</span>
+                                <span className="summary-canal-length">{canal.measuredLength || "待测量"}mm</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="summary-card-empty">无需重测根管</p>
+                        )}
+                      </div>
+
+                      <div className="summary-card">
+                        <div className="summary-card-header">
+                          <span className="summary-card-icon">💊</span>
+                          <h4>封药情况</h4>
+                        </div>
+                        <p className="summary-card-value">{medication}</p>
+                      </div>
+
+                      <div className="summary-card summary-card--accent">
+                        <div className="summary-card-header">
+                          <span className="summary-card-icon">📅</span>
+                          <h4>下一次复诊</h4>
+                        </div>
+                        {followUp ? (
+                          <div className="summary-followup">
+                            <div className="summary-followup-date">
+                              <strong>{nextFollowUpDate}</strong>
+                              {daysUntil !== null && (
+                                <span className={`summary-followup-days ${
+                                  daysUntil < 0
+                                    ? "summary-followup-days--overdue"
+                                    : daysUntil <= 3
+                                    ? "summary-followup-days--urgent"
+                                    : ""
+                                }`}>
+                                  {daysUntil < 0
+                                    ? `逾期${Math.abs(daysUntil)}天`
+                                    : daysUntil === 0
+                                    ? "今日"
+                                    : `${daysUntil}天后`}
+                                </span>
+                              )}
+                            </div>
+                            <p className="summary-followup-detail">
+                              医生：{followUpDoctor} · {followUpReason}
+                            </p>
+                            {followUp.contactStatus && (
+                              <span
+                                className="summary-followup-status"
+                                style={{
+                                  backgroundColor: contactStatusColors[followUp.contactStatus] + "15",
+                                  color: contactStatusColors[followUp.contactStatus],
+                                  borderColor: contactStatusColors[followUp.contactStatus],
+                                }}
+                              >
+                                {followUp.contactStatus}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="summary-card-empty">暂无复诊计划</p>
+                        )}
+                      </div>
+
+                      {caseConflicts.length > 0 && (
+                        <div className="summary-card summary-card--conflict full-width">
+                          <div className="summary-card-header">
+                            <span className="summary-card-icon">🚨</span>
+                            <h4>未解决冲突 ({caseConflicts.length})</h4>
+                          </div>
+                          <div className="summary-conflict-list">
+                            {caseConflicts.map(conflict => (
+                              <div key={conflict.id} className="summary-conflict-item">
+                                <div className="summary-conflict-field">
+                                  {getFieldLabel(conflict.field)}
+                                </div>
+                                <div className="summary-conflict-compare">
+                                  <div className="summary-conflict-version summary-conflict-version--local">
+                                    <span className="summary-conflict-role" style={{ color: roleColors[conflict.localChangedBy] }}>
+                                      {conflict.localChangedBy}（本地）
+                                    </span>
+                                    <span className="summary-conflict-value">{conflict.localValue || "(空)"}</span>
+                                  </div>
+                                  <span className="summary-conflict-arrow">↔</span>
+                                  <div className="summary-conflict-version summary-conflict-version--remote">
+                                    <span className="summary-conflict-role" style={{ color: roleColors[conflict.remoteChangedBy] }}>
+                                      {conflict.remoteChangedBy}（远端）
+                                    </span>
+                                    <span className="summary-conflict-value">{conflict.remoteValue || "(空)"}</span>
+                                  </div>
+                                </div>
+                                <div className="summary-conflict-actions">
+                                  <button
+                                    type="button"
+                                    className="summary-conflict-btn summary-conflict-btn--local"
+                                    onClick={() => resolveConflict(conflict.id, "local")}
+                                  >
+                                    保留本地
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="summary-conflict-btn summary-conflict-btn--remote"
+                                    onClick={() => resolveConflict(conflict.id, "remote")}
+                                  >
+                                    保留远端
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {activeCaseTab === "basic" && (() => {
                 const caseInfo = findCaseInfoById(selectedCaseId);
                 const record = findRecordByCaseId(selectedCaseId);
