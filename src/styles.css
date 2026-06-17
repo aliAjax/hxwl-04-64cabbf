@@ -1863,8 +1863,123 @@ input {
   width: min(560px, calc(100% - 48px));
 }
 
+.modal-content--export {
+  width: min(520px, calc(100% - 48px));
+}
+
 .modal-body {
   padding: 24px 28px;
+}
+
+.export-btn {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  font-weight: 600;
+  padding: 8px 18px;
+  min-height: 38px;
+  transition: all 0.2s ease;
+}
+
+.export-btn:hover {
+  background: #0284c7;
+  border-color: #0284c7;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(3, 105, 161, 0.3);
+}
+
+.export-hint {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: #0369a1;
+}
+
+.export-hint strong {
+  color: #0c4a6e;
+}
+
+.export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.export-option {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  text-align: left;
+  transition: all 0.2s ease;
+  width: 100%;
+  min-height: auto;
+}
+
+.export-option:hover {
+  border-color: var(--primary);
+  background: #f0f9ff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(3, 105, 161, 0.15);
+}
+
+.export-option:active {
+  transform: translateY(0);
+}
+
+.export-option-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+}
+
+.export-option-content h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: #1e293b;
+}
+
+.export-option-content p {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.export-fields-info {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.export-fields-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.export-field-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.export-field-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 @media (max-width: 860px) {

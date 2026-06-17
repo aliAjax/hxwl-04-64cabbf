@@ -17,6 +17,13 @@ import {
   UserRole,
   ContactStatus,
 } from "./db";
+import {
+  buildCaseSummaries,
+  generateCSV,
+  downloadCSV,
+  generatePrintableHTML,
+  openPrintWindow,
+} from "./exportUtils";
 
 const project = {
   "id": "hxwl-04",
@@ -279,6 +286,7 @@ function App() {
     plan: null,
   });
   const [showFollowUpEditModal, setShowFollowUpEditModal] = useState<boolean>(false);
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -653,6 +661,31 @@ function App() {
   const closeFollowUpEdit = () => {
     setShowFollowUpEditModal(false);
     setFollowUpEditDraft({ id: null, plan: null });
+  };
+
+  const getFilterLabel = (): string => {
+    if (activeStage) {
+      return `${activeStage}阶段`;
+    }
+    return "全部病例";
+  };
+
+  const handleExportCSV = () => {
+    const summaries = buildCaseSummaries(filteredRecords, followUpPlans, workingLengths);
+    const csvContent = generateCSV(summaries);
+    const dateStr = new Date().toISOString().split("T")[0];
+    const filterName = activeStage || "全部";
+    const filename = `根管治疗病例摘要_${filterName}_${dateStr}.csv`;
+    downloadCSV(csvContent, filename);
+    setShowExportModal(false);
+  };
+
+  const handleExportHTML = () => {
+    const summaries = buildCaseSummaries(filteredRecords, followUpPlans, workingLengths);
+    const filterLabel = getFilterLabel();
+    const htmlContent = generatePrintableHTML(summaries, filterLabel);
+    openPrintWindow(htmlContent);
+    setShowExportModal(false);
   };
 
   const updateFollowUpDraft = (field: keyof FollowUpPlan, value: string | boolean) => {
@@ -1052,7 +1085,12 @@ function App() {
                 <span className="record-total">共 {filteredRecords.length} 条</span>
               </h2>
             </div>
-            <button>导出摘要</button>
+            <button
+              className="export-btn"
+              onClick={() => setShowExportModal(true)}
+            >
+              导出摘要
+            </button>
           </div>
         <div className="record-list">
           {filteredRecords.length > 0 ? (
@@ -1891,6 +1929,54 @@ function App() {
                 >
                   保存修改
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showExportModal && (
+        <div className="modal-overlay" onClick={() => setShowExportModal(false)}>
+          <div className="modal-content modal-content--export" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">病例摘要导出</p>
+                <h2 className="modal-title">选择导出格式</h2>
+              </div>
+              <button className="modal-close" onClick={() => setShowExportModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <p className="export-hint">
+                当前筛选：<strong>{getFilterLabel()}</strong> · 共 <strong>{filteredRecords.length}</strong> 条记录
+              </p>
+              <div className="export-options">
+                <button className="export-option" onClick={handleExportCSV}>
+                  <div className="export-option-icon">📊</div>
+                  <div className="export-option-content">
+                    <h3>CSV 格式</h3>
+                    <p>可直接用 Excel 打开，方便数据整理和统计分析</p>
+                  </div>
+                </button>
+                <button className="export-option" onClick={handleExportHTML}>
+                  <div className="export-option-icon">📄</div>
+                  <div className="export-option-content">
+                    <h3>可打印 HTML</h3>
+                    <p>生成美观的打印页面，可直接打印或保存为 PDF</p>
+                  </div>
+                </button>
+              </div>
+              <div className="export-fields-info">
+                <p className="export-fields-title">导出字段：</p>
+                <div className="export-field-tags">
+                  <span className="export-field-tag">患者姓名</span>
+                  <span className="export-field-tag">牙位</span>
+                  <span className="export-field-tag">诊断</span>
+                  <span className="export-field-tag">当前阶段</span>
+                  <span className="export-field-tag">工作长度</span>
+                  <span className="export-field-tag">封药状态</span>
+                  <span className="export-field-tag">复诊计划</span>
+                  <span className="export-field-tag">备注</span>
+                </div>
               </div>
             </div>
           </div>
