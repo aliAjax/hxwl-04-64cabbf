@@ -286,6 +286,8 @@ function App() {
     editingId: null,
   });
   const [canalDraftError, setCanalDraftError] = useState<string>("");
+  const [showCaseSelectModal, setShowCaseSelectModal] = useState<boolean>(false);
+  const [caseSelectSearch, setCaseSelectSearch] = useState<string>("");
   const [timelines, setTimelines] = useState<TreatmentTimeline[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [selectedToothPosition, setSelectedToothPosition] = useState<string | null>(null);
@@ -977,6 +979,18 @@ function App() {
   const resetCanalDraft = () => {
     setCanalDraft({ toothPosition: "", entries: [], note: "", editingId: null });
     setCanalDraftError("");
+  };
+
+  const handleSelectCaseForWL = (caseInfo: CaseBasicInfo) => {
+    const existingWL = findWorkingLength(caseInfo.toothPosition);
+    if (existingWL) {
+      loadWorkingLengthForEdit(existingWL);
+    } else {
+      setCanalDraft(prev => ({ ...prev, toothPosition: caseInfo.toothPosition }));
+      setCanalDraftError("");
+    }
+    setShowCaseSelectModal(false);
+    setCaseSelectSearch("");
   };
 
   const handleCanalDraftChange = (field: keyof CanalDraft, value: string) => {
@@ -2206,17 +2220,56 @@ function App() {
 
         <div className="wl-form">
           <div className="wl-form-header">
-            <label className="wl-tooth-input">
-              <span>牙位 <span className="required">*</span></span>
-              <input
-                placeholder="例如：#36"
-                value={canalDraft.toothPosition}
-                onChange={(e) => handleCanalDraftChange("toothPosition", e.target.value)}
-              />
-            </label>
+            <div className="wl-tooth-row">
+              <label className="wl-tooth-input">
+                <span>牙位 <span className="required">*</span></span>
+                <input
+                  placeholder="例如：#36"
+                  value={canalDraft.toothPosition}
+                  onChange={(e) => handleCanalDraftChange("toothPosition", e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary-action wl-select-case-btn"
+                onClick={() => {
+                  setCaseSelectSearch("");
+                  setShowCaseSelectModal(true);
+                }}
+              >
+                📋 选择病例
+              </button>
+            </div>
             <span className="wl-form-hint">
               支持单根管、多根管及遗漏根管补录，同一牙位可录入多条根管明细
             </span>
+            {canalDraft.toothPosition && findCaseInfoByTooth(canalDraft.toothPosition.trim()) && (
+              <div className="wl-case-info">
+                <div className="wl-case-info-item">
+                  <span className="wl-case-info-label">患者</span>
+                  <span className="wl-case-info-value">
+                    {findCaseInfoByTooth(canalDraft.toothPosition.trim())?.patientName}
+                  </span>
+                </div>
+                <div className="wl-case-info-item">
+                  <span className="wl-case-info-label">诊断</span>
+                  <span className="wl-case-info-value">
+                    {findCaseInfoByTooth(canalDraft.toothPosition.trim())?.diagnosis}
+                  </span>
+                </div>
+                <div className="wl-case-info-item">
+                  <span className="wl-case-info-label">当前步骤</span>
+                  <span
+                    className="wl-case-info-badge"
+                    style={{
+                      backgroundColor: stageColors[findCaseInfoByTooth(canalDraft.toothPosition.trim())?.currentStep || "开髓"],
+                    }}
+                  >
+                    {findCaseInfoByTooth(canalDraft.toothPosition.trim())?.currentStep}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="wl-entry-header">
@@ -3364,6 +3417,80 @@ function App() {
                   保存修改
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCaseSelectModal && (
+        <div className="modal-overlay" onClick={() => setShowCaseSelectModal(false)}>
+          <div className="modal-content modal-content--case-select" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">工作长度录入</p>
+                <h2 className="modal-title">选择病例</h2>
+              </div>
+              <button className="modal-close" onClick={() => setShowCaseSelectModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="case-select-search">
+                <input
+                  type="text"
+                  placeholder="搜索牙位、患者姓名或诊断..."
+                  value={caseSelectSearch}
+                  onChange={(e) => setCaseSelectSearch(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="case-select-list">
+                {caseInfos
+                  .filter(c => {
+                    const keyword = caseSelectSearch.trim().toLowerCase();
+                    if (!keyword) return true;
+                    return (
+                      c.toothPosition.toLowerCase().includes(keyword) ||
+                      c.patientName.toLowerCase().includes(keyword) ||
+                      c.diagnosis.toLowerCase().includes(keyword)
+                    );
+                  })
+                  .sort((a, b) => a.toothPosition.localeCompare(b.toothPosition))
+                  .map(caseInfo => {
+                    const hasWL = findWorkingLength(caseInfo.toothPosition);
+                    return (
+                      <div
+                        key={caseInfo.id}
+                        className={`case-select-item ${hasWL ? "case-select-item--has-wl" : ""}`}
+                        onClick={() => handleSelectCaseForWL(caseInfo)}
+                      >
+                        <div className="case-select-item-left">
+                          <div className="case-select-item-main">
+                            <div className="case-select-item-tooth">{caseInfo.toothPosition}</div>
+                            <div className="case-select-item-patient">{caseInfo.patientName}</div>
+                          </div>
+                          <div className="case-select-item-sub">
+                            <span className="case-select-item-diagnosis">{caseInfo.diagnosis}</span>
+                            <span
+                              className="case-select-item-step"
+                              style={{ backgroundColor: stageColors[caseInfo.currentStep] }}
+                            >
+                              {caseInfo.currentStep}
+                            </span>
+                          </div>
+                        </div>
+                        {hasWL && (
+                          <div className="case-select-item-badge">
+                            ✎ 编辑
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+              {caseInfos.length === 0 && (
+                <div className="empty-state">
+                  <p>暂无病例数据</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
