@@ -31,6 +31,7 @@ export type OperationAction =
   | "创建复诊计划"
   | "更新复诊计划"
   | "更新联系状态"
+  | "确认今日到诊"
   | "删除病例";
 
 export interface CaseBasicInfo {

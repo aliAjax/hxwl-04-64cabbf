@@ -1988,6 +1988,36 @@ input {
   white-space: nowrap;
 }
 
+.confirm-arrival-btn {
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 36px;
+  padding: 0 14px;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.confirm-arrival-btn:hover:not(:disabled) {
+  background: #0284c7;
+  border-color: #0284c7;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(3, 105, 161, 0.3);
+}
+
+.confirm-arrival-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.confirm-arrival-btn--done,
+.confirm-arrival-btn:disabled {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #10b981;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
 .modal-content--followup {
   width: min(560px, calc(100% - 48px));
 }

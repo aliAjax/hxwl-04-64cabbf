@@ -1403,6 +1403,34 @@ function App() {
     ));
   };
 
+  const markConfirmedArrival = (planId: string) => {
+    const plan = followUpPlans.find(p => p.id === planId);
+    if (!plan) return;
+
+    const now = new Date();
+    const timestamp = now.toISOString().replace("T", " ").slice(0, 16);
+    const newContactNote = plan.contactNote
+      ? `${plan.contactNote}\n【${timestamp}】已确认今日到诊`
+      : `【${timestamp}】已确认今日到诊`;
+
+    if (plan.contactStatus !== "已确认") {
+      recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, "已确认");
+    }
+    recordFieldChange(plan.caseId, "contactNote", plan.contactNote, newContactNote);
+
+    addOperationLog(
+      plan.caseId,
+      "确认今日到诊",
+      `标记复诊确认到诊：${plan.toothPosition}，${plan.patientName || "未命名患者"}，复诊日期：${plan.nextDate}`
+    );
+
+    setFollowUpPlans(prev => prev.map(p =>
+      p.id === planId
+        ? { ...p, contactStatus: "已确认", contactNote: newContactNote }
+        : p
+    ));
+  };
+
   const filteredFollowUpPlans = contactStatusFilter
     ? followUpPlans.filter(p => p.contactStatus === contactStatusFilter)
     : followUpPlans;
@@ -2514,6 +2542,14 @@ function App() {
                           </div>
                         )}
                         <div className="followup-card-actions">
+                          <button
+                            type="button"
+                            className={`primary-action confirm-arrival-btn ${plan.contactStatus === "已确认" ? "confirm-arrival-btn--done" : ""}`}
+                            onClick={() => markConfirmedArrival(plan.id)}
+                            disabled={plan.contactStatus === "已确认"}
+                          >
+                            {plan.contactStatus === "已确认" ? "✓ 已确认到诊" : "已确认今日到诊"}
+                          </button>
                           <select
                             className="contact-status-select"
                             value={plan.contactStatus}
