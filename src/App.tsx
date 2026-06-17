@@ -258,6 +258,9 @@ const confirmedStatusColors: Record<ConfirmedStatus, string> = {
   "需重测": "#dc2626",
 };
 
+const treatmentSteps: TreatmentStep[] = ["开髓", "测长", "根管预备", "冲洗", "封药", "充填"];
+const steps = treatmentSteps;
+
 function createCanalId(): string {
   return `c_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -315,8 +318,7 @@ function buildTimelineForRecord(
 ): TreatmentTimeline {
   const stepIdx = treatmentSteps.indexOf(currentStep as TreatmentStep);
   const nodes: TimelineNode[] = treatmentSteps.map((step, idx) => {
-    const isCompleted = stepIdx >= 0 ? idx < stepIdx : false;
-    const isCurrent = step === currentStep;
+    const isCompleted = stepIdx >= 0 && idx < stepIdx;
     return {
       id: `${id}_tn${idx + 1}`,
       step,
@@ -324,7 +326,7 @@ function buildTimelineForRecord(
       operator: isCompleted ? "张医生" : "",
       keyParams: isCompleted ? detail : "",
       exceptionNotes: "",
-      isCompleted: isCompleted || isCurrent,
+      isCompleted,
     };
   });
   return { id, toothPosition, nodes, createdAt };
@@ -389,9 +391,6 @@ const initialWorkingLengths: WorkingLengthRecord[] = [
     ],
   },
 ];
-
-const treatmentSteps: TreatmentStep[] = ["开髓", "测长", "根管预备", "冲洗", "封药", "充填"];
-const steps = treatmentSteps;
 
 const stageColors: Record<string, string> = {
   "开髓": "#ea580c",
