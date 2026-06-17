@@ -17,10 +17,11 @@ export function buildCaseSummaries(
   workingLengths: WorkingLengthRecord[]
 ): CaseSummary[] {
   return filteredRecords.map((record) => {
-    const toothPosition = record[0];
-    const diagnosis = record[1];
-    const currentStage = record[2];
-    const detail = record[3] || "";
+    const caseId = record[0];
+    const toothPosition = record[1];
+    const diagnosis = record[2];
+    const currentStage = record[3];
+    const detail = record[4] || "";
 
     const followUp = followUpPlans.find((p) => p.toothPosition === toothPosition);
     const wlRecord = workingLengths.find((w) => w.toothPosition === toothPosition);
