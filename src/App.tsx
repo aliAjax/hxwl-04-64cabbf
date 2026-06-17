@@ -2544,11 +2544,10 @@ function App() {
                         <div className="followup-card-actions">
                           <button
                             type="button"
-                            className={`primary-action confirm-arrival-btn ${plan.contactStatus === "已确认" ? "confirm-arrival-btn--done" : ""}`}
+                            className="primary-action confirm-arrival-btn"
                             onClick={() => markConfirmedArrival(plan.id)}
-                            disabled={plan.contactStatus === "已确认"}
                           >
-                            {plan.contactStatus === "已确认" ? "✓ 已确认到诊" : "已确认今日到诊"}
+                            已确认今日到诊
                           </button>
                           <select
                             className="contact-status-select"
