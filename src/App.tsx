@@ -155,6 +155,11 @@ function getCurrentStepIndex(nodes: TimelineNode[]): number {
   return nodes.length - 1;
 }
 
+function deriveCurrentStepFromTimeline(nodes: TimelineNode[]): TreatmentStep {
+  const idx = getCurrentStepIndex(nodes);
+  return nodes[idx]?.step || treatmentSteps[0];
+}
+
 function buildTimelineForRecord(
   id: string,
   caseId: string,
@@ -1094,6 +1099,38 @@ function App() {
     return newTimeline;
   };
 
+  const syncCaseStepFromTimeline = (toothPosition: string, timelineNodes: TimelineNode[]) => {
+    const caseId = findCaseIdByTooth(toothPosition);
+    if (!caseId) return;
+
+    const derivedStep = deriveCurrentStepFromTimeline(timelineNodes);
+    const today = new Date().toISOString().split("T")[0];
+
+    const caseInfo = findCaseInfoById(caseId);
+    const oldStep = caseInfo?.currentStep || "";
+
+    if (oldStep === derivedStep) return;
+
+    setCaseInfos(prev => prev.map(c =>
+      c.id === caseId ? { ...c, currentStep: derivedStep, updatedAt: today } : c
+    ));
+
+    setRecords(prev => prev.map(r => {
+      if (r[0] === caseId) {
+        const status = derivedStep === "充填" ? "已充填" : "待复诊";
+        return [r[0], r[1], r[2], derivedStep, r[4], status];
+      }
+      return r;
+    }));
+
+    recordFieldChange(caseId, "currentStep", oldStep, derivedStep);
+    addOperationLog(
+      caseId,
+      "更新基础信息",
+      `治疗时间线驱动：当前步骤由「${oldStep || "未设置"}」更新为「${derivedStep}」`
+    );
+  };
+
   const openDetailModal = (toothPositionOrCaseId: string, source: "list" | "stage" | "followup" = "list") => {
     let caseId: string | null = null;
     let toothPosition: string | null = null;
@@ -1290,6 +1327,13 @@ function App() {
       };
     }));
 
+    setTimeout(() => {
+      const freshTimeline = findTimeline(selectedToothPosition);
+      if (freshTimeline) {
+        syncCaseStepFromTimeline(selectedToothPosition, freshTimeline.nodes);
+      }
+    }, 0);
+
     if (selectedCaseId) {
       recordFieldChange(selectedCaseId, `timeline_${node.step}`, node.isCompleted ? "未完成" : "已完成", node.isCompleted ? "已完成" : "未完成");
       addOperationLog(selectedCaseId, "编辑治疗步骤", `编辑「${node.step}」步骤：${node.keyParams || "更新参数"}`);
@@ -1299,34 +1343,67 @@ function App() {
   };
 
   const toggleNodeCompletion = (timelineId: string, nodeId: string) => {
-    let changedStep = "";
-    let nowCompleted = false;
+    const timeline = findTimeline(timelineId);
+    if (!timeline) return;
 
-    setTimelines(prev => prev.map(timeline => {
-      if (timeline.toothPosition !== timelineId) return timeline;
-      return {
-        ...timeline,
-        nodes: timeline.nodes.map(n => {
-          if (n.id === nodeId) {
-            const isCompleted = !n.isCompleted;
-            changedStep = n.step;
-            nowCompleted = isCompleted;
-            return {
-              ...n,
-              isCompleted,
-              completedAt: isCompleted && !n.completedAt
-                ? new Date().toISOString().replace("T", " ").slice(0, 16)
-                : n.completedAt,
-            };
-          }
-          return n;
-        }),
-      };
+    const targetNode = timeline.nodes.find(n => n.id === nodeId);
+    if (!targetNode) return;
+
+    const newIsCompleted = !targetNode.isCompleted;
+    const defaultOperator =
+      currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
+
+    if (newIsCompleted) {
+      if (!targetNode.completedAt.trim() && !targetNode.operator.trim()) {
+        const confirmed = confirm(
+          `即将标记「${targetNode.step}」为已完成，将自动填写：\n• 完成时间：${new Date().toISOString().replace("T", " ").slice(0, 16)}\n• 操作者：${defaultOperator}\n\n是否确认？`
+        );
+        if (!confirmed) return;
+      } else if (!targetNode.completedAt.trim()) {
+        const confirmed = confirm(
+          `即将标记「${targetNode.step}」为已完成，将自动填写完成时间。\n是否确认？`
+        );
+        if (!confirmed) return;
+      } else if (!targetNode.operator.trim()) {
+        const confirmed = confirm(
+          `即将标记「${targetNode.step}」为已完成，将自动填写操作者为「${defaultOperator}」。\n是否确认？`
+        );
+        if (!confirmed) return;
+      }
+    }
+
+    let updatedNodes: TimelineNode[] = [];
+    setTimelines(prev => prev.map(tl => {
+      if (tl.toothPosition !== timelineId) return tl;
+      const newNodes = tl.nodes.map(n => {
+        if (n.id === nodeId) {
+          return {
+            ...n,
+            isCompleted: newIsCompleted,
+            completedAt: newIsCompleted && !n.completedAt.trim()
+              ? new Date().toISOString().replace("T", " ").slice(0, 16)
+              : n.completedAt,
+            operator: newIsCompleted && !n.operator.trim()
+              ? defaultOperator
+              : n.operator,
+          };
+        }
+        return n;
+      });
+      updatedNodes = newNodes;
+      return { ...tl, nodes: newNodes };
     }));
 
-    if (selectedCaseId && changedStep) {
-      recordFieldChange(selectedCaseId, `timeline_${changedStep}`, nowCompleted ? "未完成" : "已完成", nowCompleted ? "已完成" : "未完成");
-      addOperationLog(selectedCaseId, "完成治疗步骤", `${nowCompleted ? "标记完成" : "取消完成"}「${changedStep}」步骤`);
+    setTimeout(() => {
+      const freshTimeline = findTimeline(timelineId);
+      if (freshTimeline) {
+        syncCaseStepFromTimeline(timelineId, freshTimeline.nodes);
+      }
+    }, 0);
+
+    if (selectedCaseId) {
+      recordFieldChange(selectedCaseId, `timeline_${targetNode.step}`, newIsCompleted ? "未完成" : "已完成", newIsCompleted ? "已完成" : "未完成");
+      addOperationLog(selectedCaseId, "完成治疗步骤", `${newIsCompleted ? "标记完成" : "取消完成"}「${targetNode.step}」步骤`);
     }
   };
 
