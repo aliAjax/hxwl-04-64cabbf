@@ -1371,20 +1371,15 @@ function App() {
   };
 
   const updateContactStatus = (planId: string, status: ContactStatus) => {
-    let caseIdToLog = "";
-    setFollowUpPlans(prev => prev.map(plan => {
-      if (plan.id === planId) {
-        caseIdToLog = plan.caseId;
-        if (plan.contactStatus !== status) {
-          recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, status);
-        }
-        return { ...plan, contactStatus: status };
-      }
-      return plan;
-    }));
-    if (caseIdToLog) {
-      addOperationLog(caseIdToLog, "更新联系状态", `更新复诊联系状态为「${status}」`);
-    }
+    const plan = followUpPlans.find(p => p.id === planId);
+    if (!plan || plan.contactStatus === status) return;
+
+    recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, status);
+    addOperationLog(plan.caseId, "更新联系状态", `更新复诊联系状态为「${status}」`);
+
+    setFollowUpPlans(prev => prev.map(p =>
+      p.id === planId ? { ...p, contactStatus: status } : p
+    ));
   };
 
   const filteredFollowUpPlans = contactStatusFilter
