@@ -112,6 +112,35 @@ export interface FormErrors {
   currentStep?: string;
 }
 
+export type SyncStatus = "online" | "offline" | "syncing";
+
+export interface FieldChange {
+  id: string;
+  caseId: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+  changedBy: UserRole;
+  changedAt: string;
+  syncStatus: "pending" | "synced" | "conflict";
+}
+
+export interface ConflictEntry {
+  id: string;
+  caseId: string;
+  field: string;
+  localValue: string;
+  localChangedBy: UserRole;
+  localChangedAt: string;
+  remoteValue: string;
+  remoteChangedBy: UserRole;
+  remoteChangedAt: string;
+  resolved: boolean;
+  resolvedValue?: string;
+  resolvedAt?: string;
+  resolvedBy?: UserRole;
+}
+
 export interface AppData {
   records: string[][];
   caseInfos: CaseBasicInfo[];
@@ -120,6 +149,10 @@ export interface AppData {
   workingLengths: WorkingLengthRecord[];
   timelines: TreatmentTimeline[];
   activeStage: string | null;
+  changeQueue: FieldChange[];
+  conflicts: ConflictEntry[];
+  syncStatus: SyncStatus;
+  lastSyncAt: string;
 }
 
 function createCaseId(): string {
@@ -371,6 +404,10 @@ export const getInitialData = (): AppData => ({
   workingLengths: initialWorkingLengths,
   timelines: initialTimelines,
   activeStage: null,
+  changeQueue: [],
+  conflicts: [],
+  syncStatus: "online",
+  lastSyncAt: new Date().toISOString().replace("T", " ").slice(0, 19),
 });
 
 const DATA_KEY = "main";

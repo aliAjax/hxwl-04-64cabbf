@@ -19,6 +19,9 @@ import {
   CaseBasicInfo,
   OperationLog,
   OperationAction,
+  FieldChange,
+  ConflictEntry,
+  SyncStatus,
   createCaseIdExternal,
   createOperationLog,
 } from "./db";
@@ -303,6 +306,15 @@ function App() {
   });
   const [showFollowUpEditModal, setShowFollowUpEditModal] = useState<boolean>(false);
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [changeQueue, setChangeQueue] = useState<FieldChange[]>([]);
+  const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("online");
+  const [lastSyncAt, setLastSyncAt] = useState<string>("");
+  const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
+  const [showChangeQueuePanel, setShowChangeQueuePanel] = useState<boolean>(false);
+  const [simulatingSync, setSimulatingSync] = useState<boolean>(false);
+  const [changeQueueFilter, setChangeQueueFilter] = useState<"all" | "pending" | "synced" | "conflict">("all");
+  const [changeQueueRoleFilter, setChangeQueueRoleFilter] = useState<string>("all");
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -319,6 +331,10 @@ function App() {
         setWorkingLengths(migrated.workingLengths);
         setTimelines(migrated.timelines);
         setActiveStage(migrated.activeStage);
+        setChangeQueue(migrated.changeQueue || []);
+        setConflicts(migrated.conflicts || []);
+        setSyncStatus(migrated.syncStatus || "online");
+        setLastSyncAt(migrated.lastSyncAt || new Date().toISOString().replace("T", " ").slice(0, 19));
         isInitialized.current = true;
         isPersistEnabled.current = true;
       } catch (err) {
@@ -440,9 +456,13 @@ function App() {
       workingLengths,
       timelines,
       activeStage,
+      changeQueue,
+      conflicts,
+      syncStatus,
+      lastSyncAt,
     };
     saveData(data).catch(err => console.error("保存数据失败：", err));
-  }, [records, caseInfos, operationLogs, followUpPlans, workingLengths, timelines, activeStage]);
+  }, [records, caseInfos, operationLogs, followUpPlans, workingLengths, timelines, activeStage, changeQueue, conflicts, syncStatus, lastSyncAt]);
 
   const addOperationLog = (
     caseId: string,
@@ -453,6 +473,274 @@ function App() {
       currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
     const log = createOperationLog(caseId, operatorName, currentRole, action, detail);
     setOperationLogs(prev => [log, ...prev]);
+  };
+
+  const recordFieldChange = (
+    caseId: string,
+    field: string,
+    oldValue: string,
+    newValue: string
+  ) => {
+    if (oldValue === newValue) return;
+    const operatorName =
+      currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
+    const change: FieldChange = {
+      id: `fc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      caseId,
+      field,
+      oldValue,
+      newValue,
+      changedBy: currentRole,
+      changedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+      syncStatus: "pending" as const,
+    };
+    setChangeQueue(prev => [change, ...prev]);
+  };
+
+  const getFieldChangeForCase = (caseId: string, field: string): FieldChange | undefined => {
+    return changeQueue.find(c => c.caseId === caseId && c.field === field);
+  };
+
+  const getLatestFieldChangeForCase = (caseId: string, field: string): FieldChange | undefined => {
+    return changeQueue.find(c => c.caseId === caseId && c.field === field);
+  };
+
+  const fieldLabelMap: Record<string, string> = {
+    toothPosition: "牙位",
+    patientName: "患者姓名",
+    phone: "联系电话",
+    diagnosis: "诊断",
+    currentStep: "当前步骤",
+    workingLength: "工作长度",
+    mainFileNumber: "主尖锉号",
+    medication: "封药情况",
+    remark: "备注",
+    contactStatus: "联系状态",
+    nextDate: "复诊日期",
+    doctor: "负责医生",
+    reason: "复诊原因",
+    contactNote: "联系备注",
+    workingLengthDetails: "根管参数",
+    "timeline_开髓": "开髓步骤",
+    "timeline_测长": "测长步骤",
+    "timeline_根管预备": "根管预备步骤",
+    "timeline_冲洗": "冲洗步骤",
+    "timeline_封药": "封药步骤",
+    "timeline_充填": "充填步骤",
+  };
+
+  const getFieldLabel = (field: string): string => {
+    return fieldLabelMap[field] || field;
+  };
+
+  const unresolvedConflicts = conflicts.filter(c => !c.resolved);
+
+  const simulateRemoteChanges = () => {
+    if (caseInfos.length === 0) return;
+    setSimulatingSync(true);
+    setSyncStatus("syncing");
+
+    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+    const allRoles: UserRole[] = ["医生", "助理", "前台"];
+    const randomRole = allRoles[Math.floor(Math.random() * allRoles.length)];
+
+    const doctorFields = [
+      { field: "diagnosis", getValue: (c: CaseBasicInfo) => c.diagnosis ? c.diagnosis + "（复查确认）" : "慢性牙髓炎" },
+      { field: "currentStep", getValue: () => treatmentSteps[Math.floor(Math.random() * treatmentSteps.length)] },
+      { field: "workingLength", getValue: (c: CaseBasicInfo) => c.workingLength ? c.workingLength.replace(/[\d.]+/, (parseFloat(c.workingLength) + 0.3).toFixed(1)) : "20.0mm" },
+    ];
+
+    const assistantFields = [
+      { field: "medication", getValue: () => ["Ca(OH)2 封药", "碘仿糊剂", "CP 棉球", "氢氧化钙糊剂"][Math.floor(Math.random() * 4)] },
+      { field: "mainFileNumber", getValue: (c: CaseBasicInfo) => c.mainFileNumber ? String(parseInt(c.mainFileNumber) + 5) : "25" },
+      { field: "remark", getValue: (c: CaseBasicInfo) => c.remark ? c.remark + "；助理补充记录" : "治疗过程顺利" },
+    ];
+
+    const receptionFields = [
+      { field: "patientName", getValue: (c: CaseBasicInfo) => c.patientName || "新患者" },
+      { field: "phone", getValue: (c: CaseBasicInfo) => c.phone || "138****0000" },
+    ];
+
+    const getFieldsForRole = (role: UserRole) => {
+      switch (role) {
+        case "医生": return doctorFields;
+        case "助理": return assistantFields;
+        case "前台": return receptionFields;
+      }
+    };
+
+    const numCases = Math.min(3 + Math.floor(Math.random() * 3), caseInfos.length);
+    const shuffled = [...caseInfos].sort(() => Math.random() - 0.5);
+    const targetCases = shuffled.slice(0, numCases);
+
+    setTimeout(() => {
+      const newConflicts: ConflictEntry[] = [];
+      const newChanges: FieldChange[] = [];
+
+      targetCases.forEach((caseInfo, idx) => {
+        const caseId = caseInfo.id;
+        const localPending = changeQueue.filter(c => c.caseId === caseId && c.syncStatus === "pending");
+        let hasConflict = false;
+
+        const rolesToSimulate = idx === 0 ? allRoles : [randomRole];
+
+        rolesToSimulate.forEach((simRole, roleIdx) => {
+          const fields = getFieldsForRole(simRole);
+          const fieldDef = fields[Math.floor(Math.random() * fields.length)];
+          const remoteValue = fieldDef.getValue(caseInfo);
+          const localChange = localPending.find(c => c.field === fieldDef.field);
+
+          if (localChange && localChange.newValue !== remoteValue && localChange.changedBy !== simRole) {
+            newConflicts.push({
+              id: `conflict_${Date.now()}_${idx}_${roleIdx}`,
+              caseId,
+              field: fieldDef.field,
+              localValue: localChange.newValue,
+              localChangedBy: localChange.changedBy,
+              localChangedAt: localChange.changedAt,
+              remoteValue,
+              remoteChangedBy: simRole,
+              remoteChangedAt: now,
+              resolved: false,
+            });
+            hasConflict = true;
+          } else if (!localChange) {
+            newChanges.push({
+              id: `fc_remote_${Date.now()}_${idx}_${roleIdx}`,
+              caseId,
+              field: fieldDef.field,
+              oldValue: String(caseInfo[fieldDef.field as keyof CaseBasicInfo] || ""),
+              newValue: remoteValue,
+              changedBy: simRole,
+              changedAt: now,
+              syncStatus: "synced",
+            });
+            setCaseInfos(prev => prev.map(c =>
+              c.id === caseId ? { ...c, [fieldDef.field]: remoteValue, updatedAt: now.split(" ")[0] } : c
+            ));
+          }
+        });
+
+        if (!hasConflict) {
+          const followUp = followUpPlans.find(f => f.caseId === caseId);
+          if (followUp && Math.random() > 0.5) {
+            const contactStatuses: ContactStatus[] = ["已联系", "已确认", "未接通"];
+            const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
+            if (followUp.contactStatus !== newContactStatus) {
+              const localChange = localPending.find(c => c.field === "contactStatus");
+              if (localChange && localChange.newValue !== newContactStatus) {
+                newConflicts.push({
+                  id: `conflict_${Date.now()}_${idx}_fu`,
+                  caseId,
+                  field: "contactStatus",
+                  localValue: localChange.newValue,
+                  localChangedBy: localChange.changedBy,
+                  localChangedAt: localChange.changedAt,
+                  remoteValue: newContactStatus,
+                  remoteChangedBy: "前台",
+                  remoteChangedAt: now,
+                  resolved: false,
+                });
+                hasConflict = true;
+              } else if (!localChange) {
+                newChanges.push({
+                  id: `fc_remote_${Date.now()}_${idx}_fu`,
+                  caseId,
+                  field: "contactStatus",
+                  oldValue: followUp.contactStatus,
+                  newValue: newContactStatus,
+                  changedBy: "前台",
+                  changedAt: now,
+                  syncStatus: "synced",
+                });
+                setFollowUpPlans(prev => prev.map(p =>
+                  p.caseId === caseId ? { ...p, contactStatus: newContactStatus } : p
+                ));
+              }
+            }
+          }
+        }
+
+        if (hasConflict) {
+          setChangeQueue(prev => prev.map(c => {
+            if (c.caseId === caseId && newConflicts.some(cf => cf.field === c.field)) {
+              return { ...c, syncStatus: "conflict" as const };
+            }
+            return c;
+          }));
+        }
+      });
+
+      const conflictFields = newConflicts.map(c => `${c.caseId}:${c.field}`);
+      setChangeQueue(prev => {
+        const updated = prev.map(c => {
+          if (c.syncStatus === "pending" && !conflictFields.includes(`${c.caseId}:${c.field}`)) {
+            return { ...c, syncStatus: "synced" as const };
+          }
+          return c;
+        });
+        return [...newChanges, ...updated];
+      });
+      if (newConflicts.length > 0) {
+        setConflicts(prev => [...newConflicts, ...prev]);
+        setShowConflictModal(true);
+      }
+
+      setSyncStatus("online");
+      setLastSyncAt(now);
+      setSimulatingSync(false);
+    }, 1500 + Math.random() * 1000);
+  };
+
+  const resolveConflict = (conflictId: string, choice: "local" | "remote") => {
+    const conflict = conflicts.find(c => c.id === conflictId);
+    if (!conflict) return;
+
+    const resolvedValue = choice === "local" ? conflict.localValue : conflict.remoteValue;
+
+    setConflicts(prev => prev.map(c =>
+      c.id === conflictId
+        ? {
+            ...c,
+            resolved: true,
+            resolvedValue,
+            resolvedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+            resolvedBy: currentRole,
+          }
+        : c
+    ));
+
+    if (conflict.field === "workingLength" || conflict.field === "medication" || conflict.field === "remark" ||
+        conflict.field === "diagnosis" || conflict.field === "currentStep" || conflict.field === "patientName" || conflict.field === "phone") {
+      setCaseInfos(prev => prev.map(c => {
+        if (c.id === conflict.caseId) {
+          return { ...c, [conflict.field]: resolvedValue, updatedAt: new Date().toISOString().split("T")[0] };
+        }
+        return c;
+      }));
+    }
+
+    if (conflict.field === "contactStatus" || conflict.field === "nextDate" || conflict.field === "doctor" || conflict.field === "reason") {
+      setFollowUpPlans(prev => prev.map(p => {
+        if (p.caseId === conflict.caseId) {
+          return { ...p, [conflict.field]: resolvedValue } as FollowUpPlan;
+        }
+        return p;
+      }));
+    }
+
+    setChangeQueue(prev => prev.map(c => {
+      if (c.caseId === conflict.caseId && c.field === conflict.field) {
+        return { ...c, syncStatus: "synced" as const, newValue: resolvedValue };
+      }
+      return c;
+    }));
+
+    addOperationLog(conflict.caseId, "更新基础信息", `冲突解决：${conflict.field} 保留${choice === "local" ? "本地" : "远端"}版本「${resolvedValue}」`);
+  };
+
+  const toggleSyncStatus = () => {
+    setSyncStatus(prev => prev === "online" ? "offline" : "online");
   };
 
   const findCaseInfoByTooth = (toothPosition: string): CaseBasicInfo | undefined =>
@@ -493,6 +781,10 @@ function App() {
       setWorkingLengths(initial.workingLengths);
       setTimelines(initial.timelines);
       setActiveStage(initial.activeStage);
+      setChangeQueue(initial.changeQueue || []);
+      setConflicts(initial.conflicts || []);
+      setSyncStatus(initial.syncStatus || "online");
+      setLastSyncAt(initial.lastSyncAt || new Date().toISOString().replace("T", " ").slice(0, 19));
       handleClear();
       resetCanalDraft();
       closeDetailModal();
@@ -701,6 +993,14 @@ function App() {
     const caseId = findCaseIdByTooth(canalDraft.toothPosition.trim());
 
     if (canalDraft.editingId) {
+      const existingWl = workingLengths.find(w => w.id === canalDraft.editingId);
+      if (existingWl && caseId) {
+        const oldEntrySummary = existingWl.entries.map(e => `${e.canalName}:${e.measuredLength}`).join(",");
+        const newEntrySummary = validEntries.map(e => `${e.canalName}:${e.measuredLength}`).join(",");
+        if (oldEntrySummary !== newEntrySummary) {
+          recordFieldChange(caseId, "workingLengthDetails", oldEntrySummary, newEntrySummary);
+        }
+      }
       setWorkingLengths(prev => prev.map(w =>
         w.id === canalDraft.editingId
           ? {
@@ -850,6 +1150,22 @@ function App() {
       return;
     }
 
+    const existingInfo = findCaseInfoById(selectedCaseId);
+    const trackableFields: (keyof CaseBasicInfo)[] = [
+      "toothPosition", "patientName", "phone", "diagnosis",
+      "currentStep", "workingLength", "mainFileNumber", "medication", "remark"
+    ];
+
+    if (existingInfo) {
+      trackableFields.forEach(field => {
+        const oldVal = String(existingInfo[field] || "");
+        const newVal = String(basicInfoDraft![field] || "");
+        if (oldVal !== newVal) {
+          recordFieldChange(selectedCaseId, field, oldVal, newVal);
+        }
+      });
+    }
+
     const today = new Date().toISOString().split("T")[0];
     const updatedInfo = { ...basicInfoDraft, updatedAt: today };
 
@@ -939,6 +1255,7 @@ function App() {
     }));
 
     if (selectedCaseId) {
+      recordFieldChange(selectedCaseId, `timeline_${node.step}`, node.isCompleted ? "未完成" : "已完成", node.isCompleted ? "已完成" : "未完成");
       addOperationLog(selectedCaseId, "编辑治疗步骤", `编辑「${node.step}」步骤：${node.keyParams || "更新参数"}`);
     }
 
@@ -972,6 +1289,7 @@ function App() {
     }));
 
     if (selectedCaseId && changedStep) {
+      recordFieldChange(selectedCaseId, `timeline_${changedStep}`, nowCompleted ? "未完成" : "已完成", nowCompleted ? "已完成" : "未完成");
       addOperationLog(selectedCaseId, "完成治疗步骤", `${nowCompleted ? "标记完成" : "取消完成"}「${changedStep}」步骤`);
     }
   };
@@ -1025,6 +1343,21 @@ function App() {
   const saveFollowUpPlan = () => {
     if (!followUpEditDraft.plan || !followUpEditDraft.id) return;
     const plan = followUpEditDraft.plan;
+    const existingPlan = followUpPlans.find(p => p.id === followUpEditDraft.id);
+
+    if (existingPlan && plan.caseId) {
+      const trackableFields: (keyof FollowUpPlan)[] = [
+        "nextDate", "doctor", "contactStatus", "patientName", "phone", "reason", "contactNote"
+      ];
+      trackableFields.forEach(field => {
+        const oldVal = String(existingPlan[field] || "");
+        const newVal = String(plan![field] || "");
+        if (oldVal !== newVal) {
+          recordFieldChange(plan!.caseId, field, oldVal, newVal);
+        }
+      });
+    }
+
     setFollowUpPlans(prev => prev.map(p =>
       p.id === followUpEditDraft.id ? plan! : p
     ));
@@ -1039,6 +1372,9 @@ function App() {
     setFollowUpPlans(prev => prev.map(plan => {
       if (plan.id === planId) {
         caseIdToLog = plan.caseId;
+        if (plan.contactStatus !== status) {
+          recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, status);
+        }
         return { ...plan, contactStatus: status };
       }
       return plan;
@@ -1098,6 +1434,34 @@ function App() {
           </div>
         </div>
         <div className="hero-actions">
+          <div className="sync-controls">
+            <button
+              type="button"
+              className={`sync-toggle-btn ${syncStatus}`}
+              onClick={toggleSyncStatus}
+            >
+              <span className={`sync-dot sync-dot--${syncStatus}`}></span>
+              {syncStatus === "online" ? "在线" : syncStatus === "offline" ? "离线" : "同步中"}
+            </button>
+            <button
+              type="button"
+              className="simulate-sync-btn"
+              onClick={simulateRemoteChanges}
+              disabled={simulatingSync || syncStatus === "offline"}
+            >
+              {simulatingSync ? "同步中..." : "模拟远端同步"}
+            </button>
+            <button
+              type="button"
+              className={`change-queue-btn ${unresolvedConflicts.length > 0 ? "has-conflicts" : ""}`}
+              onClick={() => setShowChangeQueuePanel(prev => !prev)}
+            >
+              变更队列 ({changeQueue.length})
+              {unresolvedConflicts.length > 0 && (
+                <span className="conflict-badge">{unresolvedConflicts.length} 冲突</span>
+              )}
+            </button>
+          </div>
           <button
             type="button"
             className="reset-data-btn"
@@ -1118,6 +1482,158 @@ function App() {
           <MetricCard key={metric} label={metric} value={metricValues[index]} index={index} />
         ))}
       </section>
+
+      {showChangeQueuePanel && (
+        <section className="collab-panel panel">
+          <div className="section-heading">
+            <div>
+              <p>离线协作 · 变更队列</p>
+              <h2>
+                本地变更记录
+                <span className="record-total">共 {changeQueue.length} 条 · {unresolvedConflicts.length} 冲突未解决</span>
+              </h2>
+            </div>
+            <div className="collab-panel-actions">
+              {unresolvedConflicts.length > 0 && (
+                <button
+                  type="button"
+                  className="primary-action conflict-action-btn"
+                  onClick={() => setShowConflictModal(true)}
+                >
+                  解决冲突 ({unresolvedConflicts.length})
+                </button>
+              )}
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setShowChangeQueuePanel(false)}
+              >
+                收起
+              </button>
+            </div>
+          </div>
+          <div className="collab-sync-info">
+            <div className="collab-sync-stat">
+              <span className={`sync-dot sync-dot--${syncStatus}`}></span>
+              <strong>{syncStatus === "online" ? "在线" : syncStatus === "offline" ? "离线" : "同步中"}</strong>
+              <span>当前状态</span>
+            </div>
+            <div className="collab-sync-stat">
+              <strong>{changeQueue.filter(c => c.syncStatus === "pending").length}</strong>
+              <span>待同步</span>
+            </div>
+            <div className="collab-sync-stat">
+              <strong>{changeQueue.filter(c => c.syncStatus === "synced").length}</strong>
+              <span>已同步</span>
+            </div>
+            <div className="collab-sync-stat collab-sync-stat--conflict">
+              <strong>{unresolvedConflicts.length}</strong>
+              <span>冲突</span>
+            </div>
+            <div className="collab-sync-stat">
+              <strong>{lastSyncAt ? lastSyncAt.split(" ")[1] : "-"}</strong>
+              <span>上次同步</span>
+            </div>
+          </div>
+          <div className="collab-filters">
+            <div className="collab-filter-group">
+              <span className="collab-filter-label">状态：</span>
+              <div className="collab-filter-chips">
+                {[
+                  { key: "all", label: "全部" },
+                  { key: "pending", label: "待同步" },
+                  { key: "synced", label: "已同步" },
+                  { key: "conflict", label: "冲突" },
+                ].map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`collab-filter-chip ${changeQueueFilter === item.key ? "collab-filter-chip--active" : ""}`}
+                    onClick={() => setChangeQueueFilter(item.key as any)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="collab-filter-group">
+              <span className="collab-filter-label">角色：</span>
+              <div className="collab-filter-chips">
+                {[
+                  { key: "all", label: "全部" },
+                  { key: "医生", label: "医生" },
+                  { key: "助理", label: "助理" },
+                  { key: "前台", label: "前台" },
+                ].map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`collab-filter-chip ${changeQueueRoleFilter === item.key ? "collab-filter-chip--active" : ""}`}
+                    onClick={() => setChangeQueueRoleFilter(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="collab-queue-list">
+            {(() => {
+              const filtered = changeQueue.filter(c => {
+                if (changeQueueFilter !== "all" && c.syncStatus !== changeQueueFilter) return false;
+                if (changeQueueRoleFilter !== "all" && c.changedBy !== changeQueueRoleFilter) return false;
+                return true;
+              });
+              if (filtered.length === 0) {
+                return (
+                  <div className="empty-state">
+                    <p>暂无符合条件的变更记录</p>
+                    <p className="empty-state-hint">尝试调整筛选条件或编辑病例字段</p>
+                  </div>
+                );
+              }
+              return filtered.slice(0, 30).map(change => {
+                const caseInfo = findCaseInfoById(change.caseId);
+                const isConflict = change.syncStatus === "conflict";
+                return (
+                  <div key={change.id} className={`collab-queue-item ${isConflict ? "collab-queue-item--conflict" : ""}`}>
+                    <div className="collab-queue-left">
+                      <span
+                        className="collab-queue-avatar"
+                        style={{ backgroundColor: roleColors[change.changedBy] }}
+                      >
+                        {change.changedBy.charAt(0)}
+                      </span>
+                    </div>
+                    <div className="collab-queue-body">
+                      <div className="collab-queue-header">
+                        <span className="collab-queue-case">
+                          {caseInfo?.toothPosition || change.caseId.slice(0, 12)}
+                        </span>
+                        <span className="collab-queue-field">{getFieldLabel(change.field)}</span>
+                        <span
+                          className={`collab-queue-status collab-queue-status--${change.syncStatus}`}
+                        >
+                          {change.syncStatus === "pending" ? "待同步" : change.syncStatus === "synced" ? "已同步" : "冲突"}
+                        </span>
+                      </div>
+                      <div className="collab-queue-diff">
+                        <span className="collab-queue-old">{change.oldValue || "(空)"}</span>
+                        <span className="collab-queue-arrow">→</span>
+                        <span className="collab-queue-new">{change.newValue || "(空)"}</span>
+                      </div>
+                      <div className="collab-queue-meta">
+                        <span style={{ color: roleColors[change.changedBy] }}>{change.changedBy}</span>
+                        <span>{change.changedAt}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </section>
+      )}
 
       <section className="stage-tabs">
         <button
@@ -1442,6 +1958,9 @@ function App() {
                 : 0;
               const timeline = findTimeline(toothPosition);
               const currentStepIdx = timeline ? getCurrentStepIndex(timeline.nodes) : -1;
+              const casePendingChanges = changeQueue.filter(c => c.caseId === caseId && c.syncStatus === "pending").length;
+              const caseConflicts = conflicts.filter(c => c.caseId === caseId && !c.resolved).length;
+              const caseSyncedChanges = changeQueue.filter(c => c.caseId === caseId && c.syncStatus === "synced").length;
               return (
                 <article key={caseId + index} className="record-card" onClick={() => openDetailModal(caseId, activeStage ? "stage" : "list")}>
                   <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
@@ -1453,12 +1972,19 @@ function App() {
                           <span className="record-patient-name">{caseInfo.patientName}</span>
                         )}
                       </h3>
-                      <span
-                        className="stage-badge"
-                        style={{ backgroundColor: stageColors[record[3]] }}
-                      >
-                        {record[3]}
-                      </span>
+                      <div className="record-header-right">
+                        <span
+                          className="stage-badge"
+                          style={{ backgroundColor: stageColors[record[3]] }}
+                        >
+                          {record[3]}
+                        </span>
+                        {(casePendingChanges > 0 || caseConflicts > 0) && (
+                          <span className={`record-sync-badge ${caseConflicts > 0 ? "record-sync-badge--conflict" : "record-sync-badge--pending"}`}>
+                            {caseConflicts > 0 ? `${caseConflicts} 冲突` : `${casePendingChanges} 待同步`}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <p>{[record[2], record[4]].filter(Boolean).join(" · ")}</p>
                     {timeline && (
@@ -2119,58 +2645,81 @@ function App() {
                       </div>
                     ) : (
                       <div className="basic-info-grid">
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">牙位</span>
-                          <span className="basic-info-value">{displayInfo?.toothPosition || record?.[1] || "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">患者姓名</span>
-                          <span className="basic-info-value">{displayInfo?.patientName || "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">联系电话</span>
-                          <span className="basic-info-value">{displayInfo?.phone || "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">诊断</span>
-                          <span className="basic-info-value">{displayInfo?.diagnosis || record?.[2] || "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">当前步骤</span>
-                          <span
-                            className="basic-info-value stage-tag"
-                            style={{
-                              backgroundColor: stageColors[displayInfo?.currentStep || record?.[3] || "开髓"] + "15",
-                              color: stageColors[displayInfo?.currentStep || record?.[3] || "开髓"],
-                            }}
-                          >
-                            {displayInfo?.currentStep || record?.[3] || "-"}
-                          </span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">工作长度</span>
-                          <span className="basic-info-value">{displayInfo?.workingLength || "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">主尖锉号</span>
-                          <span className="basic-info-value">{displayInfo?.mainFileNumber ? `#${displayInfo.mainFileNumber}` : "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">封药情况</span>
-                          <span className="basic-info-value">{displayInfo?.medication || "-"}</span>
-                        </div>
-                        <div className="basic-info-item full-width">
-                          <span className="basic-info-label">备注</span>
-                          <span className="basic-info-value">{displayInfo?.remark || "暂无备注"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">创建日期</span>
-                          <span className="basic-info-value">{displayInfo?.createdAt || "-"}</span>
-                        </div>
-                        <div className="basic-info-item">
-                          <span className="basic-info-label">最后更新</span>
-                          <span className="basic-info-value">{displayInfo?.updatedAt || "-"}</span>
-                        </div>
+                        {([
+                          { label: "牙位", field: "toothPosition", value: displayInfo?.toothPosition || record?.[1] || "-" },
+                          { label: "患者姓名", field: "patientName", value: displayInfo?.patientName || "-" },
+                          { label: "联系电话", field: "phone", value: displayInfo?.phone || "-" },
+                          { label: "诊断", field: "diagnosis", value: displayInfo?.diagnosis || record?.[2] || "-" },
+                          { label: "当前步骤", field: "currentStep", value: displayInfo?.currentStep || record?.[3] || "-", isStage: true },
+                          { label: "工作长度", field: "workingLength", value: displayInfo?.workingLength || "-" },
+                          { label: "主尖锉号", field: "mainFileNumber", value: displayInfo?.mainFileNumber ? `#${displayInfo.mainFileNumber}` : "-" },
+                          { label: "封药情况", field: "medication", value: displayInfo?.medication || "-" },
+                          { label: "备注", field: "remark", value: displayInfo?.remark || "暂无备注", fullWidth: true },
+                          { label: "创建日期", field: "createdAt", value: displayInfo?.createdAt || "-" },
+                          { label: "最后更新", field: "updatedAt", value: displayInfo?.updatedAt || "-" },
+                        ] as { label: string; field: string; value: string; isStage?: boolean; fullWidth?: boolean }[]).map(item => {
+                          const change = getLatestFieldChangeForCase(selectedCaseId, item.field);
+                          const conflictForField = conflicts.find(c => c.caseId === selectedCaseId && c.field === item.field && !c.resolved);
+                          return (
+                            <div key={item.field} className={`basic-info-item ${item.fullWidth ? "full-width" : ""} ${conflictForField ? "basic-info-item--conflict" : ""}`}>
+                              <span className="basic-info-label">
+                                {item.label}
+                                {change && (
+                                  <span
+                                    className="field-source-tag"
+                                    style={{ backgroundColor: roleColors[change.changedBy] + "15", color: roleColors[change.changedBy] }}
+                                  >
+                                    {change.changedBy} · {change.changedAt.split(" ")[1]}
+                                  </span>
+                                )}
+                                {conflictForField && (
+                                  <span className="field-conflict-tag">冲突</span>
+                                )}
+                              </span>
+                              {item.isStage ? (
+                                <span
+                                  className="basic-info-value stage-tag"
+                                  style={{
+                                    backgroundColor: stageColors[displayInfo?.currentStep || record?.[3] || "开髓"] + "15",
+                                    color: stageColors[displayInfo?.currentStep || record?.[3] || "开髓"],
+                                  }}
+                                >
+                                  {item.value}
+                                </span>
+                              ) : (
+                                <span className="basic-info-value">{item.value}</span>
+                              )}
+                              {conflictForField && (
+                                <div className="field-conflict-detail">
+                                  <span>本地：{conflictForField.localValue}（{conflictForField.localChangedBy}）</span>
+                                  <span>远端：{conflictForField.remoteValue}（{conflictForField.remoteChangedBy}）</span>
+                                  <div className="field-conflict-actions">
+                                    <button
+                                      type="button"
+                                      className="field-conflict-btn field-conflict-btn--local"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        resolveConflict(conflictForField.id, "local");
+                                      }}
+                                    >
+                                      保留本地
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="field-conflict-btn field-conflict-btn--remote"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        resolveConflict(conflictForField.id, "remote");
+                                      }}
+                                    >
+                                      保留远端
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2777,6 +3326,80 @@ function App() {
                   <span className="export-field-tag">备注</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConflictModal && unresolvedConflicts.length > 0 && (
+        <div className="modal-overlay" onClick={() => setShowConflictModal(false)}>
+          <div className="modal-content modal-content--conflict" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow" style={{ color: "#dc2626" }}>数据冲突</p>
+                <h2 className="modal-title">
+                  解决同步冲突
+                  <span className="record-total">{unresolvedConflicts.length} 个字段存在冲突</span>
+                </h2>
+              </div>
+              <button className="modal-close" onClick={() => setShowConflictModal(false)}>×</button>
+            </div>
+            <div className="conflict-list">
+              {unresolvedConflicts.map(conflict => {
+                const caseInfo = findCaseInfoById(conflict.caseId);
+                return (
+                  <div key={conflict.id} className="conflict-item">
+                    <div className="conflict-item-header">
+                      <h3>{caseInfo?.toothPosition || conflict.caseId.slice(0, 12)}</h3>
+                      <span className="conflict-field-name">{getFieldLabel(conflict.field)}</span>
+                    </div>
+                    <div className="conflict-compare">
+                      <div className="conflict-version conflict-version--local">
+                        <div className="conflict-version-header">
+                          <span
+                            className="conflict-version-role"
+                            style={{ backgroundColor: roleColors[conflict.localChangedBy] + "15", color: roleColors[conflict.localChangedBy] }}
+                          >
+                            {conflict.localChangedBy} · 本地
+                          </span>
+                          <span className="conflict-version-time">{conflict.localChangedAt.split(" ")[1]}</span>
+                        </div>
+                        <div className="conflict-version-value">{conflict.localValue || "(空)"}</div>
+                        <button
+                          type="button"
+                          className="conflict-choose-btn conflict-choose-btn--local"
+                          onClick={() => resolveConflict(conflict.id, "local")}
+                        >
+                          保留本地版本
+                        </button>
+                      </div>
+                      <div className="conflict-vs">VS</div>
+                      <div className="conflict-version conflict-version--remote">
+                        <div className="conflict-version-header">
+                          <span
+                            className="conflict-version-role"
+                            style={{ backgroundColor: roleColors[conflict.remoteChangedBy] + "15", color: roleColors[conflict.remoteChangedBy] }}
+                          >
+                            {conflict.remoteChangedBy} · 远端
+                          </span>
+                          <span className="conflict-version-time">{conflict.remoteChangedAt.split(" ")[1]}</span>
+                        </div>
+                        <div className="conflict-version-value">{conflict.remoteValue || "(空)"}</div>
+                        <button
+                          type="button"
+                          className="conflict-choose-btn conflict-choose-btn--remote"
+                          onClick={() => resolveConflict(conflict.id, "remote")}
+                        >
+                          保留远端版本
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="conflict-footer">
+              <p className="conflict-hint">选择要保留的版本后，另一版本将被覆盖。冲突解决后会自动同步。</p>
             </div>
           </div>
         </div>
