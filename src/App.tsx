@@ -1,5 +1,20 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import "./styles.css";
+import {
+  initDB,
+  saveData,
+  resetToInitialData,
+  AppData,
+  CaseRecord as ICaseRecord,
+  FormErrors,
+  FollowUpPlan,
+  ConfirmedStatus,
+  CanalEntry,
+  WorkingLengthRecord,
+  TreatmentStep,
+  TimelineNode,
+  TreatmentTimeline,
+} from "./db";
 
 const project = {
   "id": "hxwl-04",
@@ -41,162 +56,9 @@ const project = {
     "封药",
     "主尖锉号"
   ],
-  "records": [
-    [
-      "#36",
-      "慢性根尖周炎",
-      "封药",
-      "MB 19.5mm，主尖锉#30",
-      "待复诊"
-    ],
-    [
-      "#11",
-      "外伤后变色",
-      "充填",
-      "单根管，冷侧压完成",
-      "已充填"
-    ],
-    [
-      "#46",
-      "急性牙髓炎",
-      "测长",
-      "近中双根管需复诊",
-      "待复诊"
-    ],
-    [
-      "#14",
-      "深龋穿髓",
-      "开髓",
-      "开髓孔通畅，出血明显",
-      "待复诊"
-    ],
-    [
-      "#25",
-      "慢性牙髓炎",
-      "根管预备",
-      "MB2 18mm，主尖锉#25",
-      "待复诊"
-    ],
-    [
-      "#37",
-      "牙髓坏死",
-      "冲洗",
-      "3%NaClO冲洗，超声荡洗",
-      "待复诊"
-    ],
-    [
-      "#16",
-      "急性根尖周炎",
-      "开髓",
-      "开髓引流，脓液溢出",
-      "待复诊"
-    ],
-    [
-      "#21",
-      "牙体缺损",
-      "充填",
-      "热牙胶垂直加压，桩道预备",
-      "已充填"
-    ],
-    [
-      "#47",
-      "慢性根尖周脓肿",
-      "根管预备",
-      "远中根20mm，弯曲根管",
-      "待复诊"
-    ],
-    [
-      "#15",
-      "可逆性牙髓炎",
-      "冲洗",
-      "生理盐水冲洗，EDTA预备",
-      "待复诊"
-    ],
-    [
-      "#26",
-      "隐裂牙",
-      "封药",
-      "Ca(OH)2封药，一周后复诊",
-      "待复诊"
-    ],
-    [
-      "#31",
-      "外伤露髓",
-      "测长",
-      "17mm，根尖孔闭合",
-      "待复诊"
-    ],
-    [
-      "#45",
-      "慢性牙髓炎急性发作",
-      "根管预备",
-      "预备至#30，5.25%NaClO冲洗",
-      "待复诊"
-    ],
-    [
-      "#24",
-      "深龋",
-      "开髓",
-      "局麻下开髓，冠髓切除",
-      "待复诊"
-    ],
-    [
-      "#35",
-      "根尖周炎",
-      "充填",
-      "恰填，术后片显示良好",
-      "已充填"
-    ]
-  ]
 };
 
-interface CaseRecord {
-  toothPosition: string;
-  diagnosis: string;
-  currentStep: string;
-  workingLength: string;
-  mainFileNumber: string;
-  medication: string;
-  remark: string;
-  followUpDate: string;
-  followUpDoctor: string;
-  followUpReason: string;
-  followUpReminder: boolean;
-}
-
-interface FormErrors {
-  toothPosition?: string;
-  diagnosis?: string;
-  currentStep?: string;
-}
-
-interface FollowUpPlan {
-  id: string;
-  toothPosition: string;
-  nextDate: string;
-  doctor: string;
-  reason: string;
-  reminderEnabled: boolean;
-}
-
-type ConfirmedStatus = "待确认" | "已确认" | "需重测";
-
-interface CanalEntry {
-  id: string;
-  canalName: string;
-  measuredLength: string;
-  referenceApex: string;
-  measurementMethod: string;
-  confirmedStatus: ConfirmedStatus;
-  isSupplementary: boolean;
-}
-
-interface WorkingLengthRecord {
-  id: string;
-  toothPosition: string;
-  entries: CanalEntry[];
-  note: string;
-}
+type CaseRecord = ICaseRecord;
 
 interface CanalDraft {
   toothPosition: string;
@@ -205,45 +67,11 @@ interface CanalDraft {
   editingId: string | null;
 }
 
-type TreatmentStep = "开髓" | "测长" | "根管预备" | "冲洗" | "封药" | "充填";
-
-interface TimelineNode {
-  id: string;
-  step: TreatmentStep;
-  completedAt: string;
-  operator: string;
-  keyParams: string;
-  exceptionNotes: string;
-  isCompleted: boolean;
-}
-
-interface TreatmentTimeline {
-  id: string;
-  toothPosition: string;
-  nodes: TimelineNode[];
-  createdAt: string;
-}
-
 interface TimelineDraft {
   toothPosition: string;
   editingNodeId: string | null;
   node: TimelineNode | null;
 }
-
-const initialFollowUpPlans: FollowUpPlan[] = [
-  { id: "fp1", toothPosition: "#36", nextDate: "2026-06-14", doctor: "张医生", reason: "Ca(OH)2封药到期，需换药或根充", reminderEnabled: true },
-  { id: "fp2", toothPosition: "#46", nextDate: "2026-06-18", doctor: "李医生", reason: "近中双根管继续测长", reminderEnabled: true },
-  { id: "fp3", toothPosition: "#14", nextDate: "2026-06-20", doctor: "张医生", reason: "开髓后继续根管预备", reminderEnabled: false },
-  { id: "fp4", toothPosition: "#25", nextDate: "2026-06-19", doctor: "王医生", reason: "根管预备完成后封药评估", reminderEnabled: true },
-  { id: "fp5", toothPosition: "#37", nextDate: "2026-06-15", doctor: "李医生", reason: "冲洗后封药观察", reminderEnabled: true },
-  { id: "fp6", toothPosition: "#16", nextDate: "2026-06-17", doctor: "张医生", reason: "开髓引流后复查", reminderEnabled: false },
-  { id: "fp7", toothPosition: "#26", nextDate: "2026-06-22", doctor: "王医生", reason: "Ca(OH)2封药一周后复诊", reminderEnabled: true },
-  { id: "fp8", toothPosition: "#31", nextDate: "2026-06-25", doctor: "李医生", reason: "测长后根管预备", reminderEnabled: false },
-  { id: "fp9", toothPosition: "#47", nextDate: "2026-06-16", doctor: "张医生", reason: "弯曲根管预备复诊", reminderEnabled: true },
-  { id: "fp10", toothPosition: "#15", nextDate: "2026-06-21", doctor: "王医生", reason: "冲洗后评估封药", reminderEnabled: true },
-  { id: "fp11", toothPosition: "#45", nextDate: "2026-06-19", doctor: "李医生", reason: "根管预备后封药观察", reminderEnabled: true },
-  { id: "fp12", toothPosition: "#24", nextDate: "2026-06-18", doctor: "张医生", reason: "局麻开髓后继续治疗", reminderEnabled: false },
-];
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
 
@@ -332,66 +160,6 @@ function buildTimelineForRecord(
   return { id, toothPosition, nodes, createdAt };
 }
 
-const initialTimelines: TreatmentTimeline[] = project.records.map((r, i) =>
-  buildTimelineForRecord(`tl${i + 1}`, r[0], r[2], r[3], "2026-06-10")
-);
-
-const initialWorkingLengths: WorkingLengthRecord[] = [
-  {
-    id: "wl1",
-    toothPosition: "#36",
-    note: "近中双根管，电测法确认",
-    entries: [
-      { id: "c1", canalName: "MB", measuredLength: "19.5", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
-      { id: "c2", canalName: "ML", measuredLength: "18.5", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
-      { id: "c3", canalName: "DB", measuredLength: "20.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "待确认", isSupplementary: false },
-    ],
-  },
-  {
-    id: "wl2",
-    toothPosition: "#11",
-    note: "单根管，冷侧压完成",
-    entries: [
-      { id: "c4", canalName: "单根管", measuredLength: "23.0", referenceApex: "牙本质牙骨质界", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
-    ],
-  },
-  {
-    id: "wl3",
-    toothPosition: "#46",
-    note: "近中双根管需复诊测长",
-    entries: [
-      { id: "c5", canalName: "MB", measuredLength: "19.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "待确认", isSupplementary: false },
-      { id: "c6", canalName: "ML", measuredLength: "18.5", referenceApex: "根尖孔", measurementMethod: "手感法", confirmedStatus: "需重测", isSupplementary: false },
-    ],
-  },
-  {
-    id: "wl4",
-    toothPosition: "#25",
-    note: "MB2遗漏根管补录",
-    entries: [
-      { id: "c7", canalName: "MB", measuredLength: "18.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
-      { id: "c8", canalName: "MB2", measuredLength: "18.0", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: true },
-    ],
-  },
-  {
-    id: "wl5",
-    toothPosition: "#47",
-    note: "远中根弯曲",
-    entries: [
-      { id: "c9", canalName: "近中", measuredLength: "19.5", referenceApex: "根尖孔", measurementMethod: "电测法", confirmedStatus: "已确认", isSupplementary: false },
-      { id: "c10", canalName: "远中", measuredLength: "20.0", referenceApex: "根尖孔", measurementMethod: "X线估测法", confirmedStatus: "待确认", isSupplementary: false },
-    ],
-  },
-  {
-    id: "wl6",
-    toothPosition: "#31",
-    note: "根尖孔闭合",
-    entries: [
-      { id: "c11", canalName: "单根管", measuredLength: "17.0", referenceApex: "解剖根尖孔", measurementMethod: "手感法", confirmedStatus: "已确认", isSupplementary: false },
-    ],
-  },
-];
-
 const stageColors: Record<string, string> = {
   "开髓": "#ea580c",
   "测长": "#0369a1",
@@ -450,13 +218,15 @@ const initialFormData: CaseRecord = {
 };
 
 function App() {
-  const [records, setRecords] = useState<string[][]>(project.records);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isResetting, setIsResetting] = useState<boolean>(false);
+  const [records, setRecords] = useState<string[][]>([]);
   const [formData, setFormData] = useState<CaseRecord>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
   const [activeStage, setActiveStage] = useState<string | null>(null);
-  const [followUpPlans, setFollowUpPlans] = useState<FollowUpPlan[]>(initialFollowUpPlans);
+  const [followUpPlans, setFollowUpPlans] = useState<FollowUpPlan[]>([]);
   const [sortAsc, setSortAsc] = useState<boolean>(true);
-  const [workingLengths, setWorkingLengths] = useState<WorkingLengthRecord[]>(initialWorkingLengths);
+  const [workingLengths, setWorkingLengths] = useState<WorkingLengthRecord[]>([]);
   const [canalDraft, setCanalDraft] = useState<CanalDraft>({
     toothPosition: "",
     entries: [],
@@ -464,7 +234,7 @@ function App() {
     editingId: null,
   });
   const [canalDraftError, setCanalDraftError] = useState<string>("");
-  const [timelines, setTimelines] = useState<TreatmentTimeline[]>(initialTimelines);
+  const [timelines, setTimelines] = useState<TreatmentTimeline[]>([]);
   const [selectedToothPosition, setSelectedToothPosition] = useState<string | null>(null);
   const [timelineDraft, setTimelineDraft] = useState<TimelineDraft>({
     toothPosition: "",
@@ -473,6 +243,67 @@ function App() {
   });
   const [timelineDraftError, setTimelineDraftError] = useState<string>("");
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
+
+  const isInitialized = useRef(false);
+  const isPersistEnabled = useRef(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await initDB();
+        setRecords(data.records);
+        setFollowUpPlans(data.followUpPlans);
+        setWorkingLengths(data.workingLengths);
+        setTimelines(data.timelines);
+        setActiveStage(data.activeStage);
+        isInitialized.current = true;
+        isPersistEnabled.current = true;
+      } catch (err) {
+        console.error("初始化 IndexedDB 失败：", err);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!isPersistEnabled.current) return;
+    const data: AppData = {
+      records,
+      followUpPlans,
+      workingLengths,
+      timelines,
+      activeStage,
+    };
+    saveData(data).catch(err => console.error("保存数据失败：", err));
+  }, [records, followUpPlans, workingLengths, timelines, activeStage]);
+
+  const handleResetData = async () => {
+    if (!confirm("确定要清空所有本地数据并恢复到初始示例数据吗？此操作不可撤销。")) {
+      return;
+    }
+    try {
+      setIsResetting(true);
+      isPersistEnabled.current = false;
+      const initial = await resetToInitialData();
+      setRecords(initial.records);
+      setFollowUpPlans(initial.followUpPlans);
+      setWorkingLengths(initial.workingLengths);
+      setTimelines(initial.timelines);
+      setActiveStage(initial.activeStage);
+      handleClear();
+      resetCanalDraft();
+      closeDetailModal();
+      setTimeout(() => {
+        isPersistEnabled.current = true;
+      }, 100);
+    } catch (err) {
+      console.error("重置数据失败：", err);
+      alert("重置数据失败，请查看控制台。");
+    } finally {
+      setIsResetting(false);
+    }
+  };
 
   const metricValues = calculateMetrics(records, activeStage);
   const filteredRecords = activeStage
@@ -495,7 +326,7 @@ function App() {
   const handleInputChange = (field: keyof CaseRecord, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
     if (errors[field as keyof FormErrors]) {
-      setErrors(prev => ({ ...prev, [field]: undefined }));
+      setErrors((prev: FormErrors) => ({ ...prev, [field]: undefined }));
     }
   };
 
@@ -771,6 +602,17 @@ function App() {
     }));
   };
 
+  if (isLoading) {
+    return (
+      <main className="app-shell">
+        <div className="loading-overlay">
+          <div className="loading-spinner"></div>
+          <p>正在加载本地数据...</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -779,9 +621,19 @@ function App() {
           <h1>{project.title}</h1>
           <p className="subtitle">{project.subtitle}</p>
         </div>
-        <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+        <div className="hero-actions">
+          <button
+            type="button"
+            className="reset-data-btn"
+            onClick={handleResetData}
+            disabled={isResetting}
+          >
+            {isResetting ? "重置中..." : "恢复示例数据"}
+          </button>
+          <div className="stack-card">
+            <span>技术栈</span>
+            <strong>{project.stack}</strong>
+          </div>
         </div>
       </section>
 
@@ -1003,7 +855,7 @@ function App() {
                                     idx < currentStepIdx || idx === currentStepIdx
                                       ? stageColors[node.step]
                                       : undefined,
-                                }}
+                                } as React.CSSProperties}
                                 title={`${node.step}${node.isCompleted ? " (已完成)" : ""}`}
                               />
                               {idx < timeline.nodes.length - 1 && (
@@ -1018,7 +870,7 @@ function App() {
                                       idx < currentStepIdx
                                         ? stageColors[node.step]
                                         : undefined,
-                                  }}
+                                  } as React.CSSProperties}
                                 />
                               )}
                             </React.Fragment>
@@ -1481,7 +1333,7 @@ function App() {
                               className="timeline-detail-dot"
                               style={{
                                 "--stage-color": stageColors[node.step],
-                              }}
+                              } as React.CSSProperties}
                             >
                               {node.isCompleted ? "✓" : idx + 1}
                             </div>
@@ -1492,7 +1344,7 @@ function App() {
                                 }`}
                                 style={{
                                   "--stage-color": stageColors[node.step],
-                                }}
+                                } as React.CSSProperties}
                               />
                             )}
                           </div>
@@ -1502,7 +1354,7 @@ function App() {
                                 className="timeline-detail-step"
                                 style={{
                                   "--stage-color": stageColors[node.step],
-                                }}
+                                } as React.CSSProperties}
                               >
                                 {node.step}
                               </h3>
