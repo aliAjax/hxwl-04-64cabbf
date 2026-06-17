@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import "./styles.css";
 
 const project = {
@@ -205,6 +205,31 @@ interface CanalDraft {
   editingId: string | null;
 }
 
+type TreatmentStep = "开髓" | "测长" | "根管预备" | "冲洗" | "封药" | "充填";
+
+interface TimelineNode {
+  id: string;
+  step: TreatmentStep;
+  completedAt: string;
+  operator: string;
+  keyParams: string;
+  exceptionNotes: string;
+  isCompleted: boolean;
+}
+
+interface TreatmentTimeline {
+  id: string;
+  toothPosition: string;
+  nodes: TimelineNode[];
+  createdAt: string;
+}
+
+interface TimelineDraft {
+  toothPosition: string;
+  editingNodeId: string | null;
+  node: TimelineNode | null;
+}
+
 const initialFollowUpPlans: FollowUpPlan[] = [
   { id: "fp1", toothPosition: "#36", nextDate: "2026-06-14", doctor: "张医生", reason: "Ca(OH)2封药到期，需换药或根充", reminderEnabled: true },
   { id: "fp2", toothPosition: "#46", nextDate: "2026-06-18", doctor: "李医生", reason: "近中双根管继续测长", reminderEnabled: true },
@@ -248,6 +273,99 @@ function createEmptyCanalEntry(): CanalEntry {
     isSupplementary: false,
   };
 }
+
+function createTimelineNodeId(): string {
+  return `tn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createEmptyTimelineNode(step: TreatmentStep): TimelineNode {
+  return {
+    id: createTimelineNodeId(),
+    step,
+    completedAt: "",
+    operator: "",
+    keyParams: "",
+    exceptionNotes: "",
+    isCompleted: false,
+  };
+}
+
+function createInitialTimeline(toothPosition: string): TreatmentTimeline {
+  return {
+    id: `tl_${Date.now()}`,
+    toothPosition,
+    nodes: treatmentSteps.map(step => createEmptyTimelineNode(step)),
+    createdAt: new Date().toISOString().split("T")[0],
+  };
+}
+
+function getCurrentStepIndex(nodes: TimelineNode[]): number {
+  for (let i = 0; i < nodes.length; i++) {
+    if (!nodes[i].isCompleted) {
+      return i;
+    }
+  }
+  return nodes.length - 1;
+}
+
+function getCurrentStep(nodes: TimelineNode[]): TreatmentStep {
+  return nodes[getCurrentStepIndex(nodes)].step;
+}
+
+const initialTimelines: TreatmentTimeline[] = [
+  {
+    id: "tl1",
+    toothPosition: "#36",
+    createdAt: "2026-06-10",
+    nodes: [
+      { id: "tn1", step: "开髓", completedAt: "2026-06-10 09:30", operator: "张医生", keyParams: "局麻下开髓，冠髓切除，开髓孔通畅", exceptionNotes: "出血明显，止血耗时较长", isCompleted: true },
+      { id: "tn2", step: "测长", completedAt: "2026-06-10 10:15", operator: "张医生", keyParams: "MB 19.5mm, ML 18.5mm, DB 20.0mm", exceptionNotes: "DB根管疑似钙化，需后续确认", isCompleted: true },
+      { id: "tn3", step: "根管预备", completedAt: "2026-06-10 11:00", operator: "张医生", keyParams: "主尖锉#30，预备至根尖狭窄部", exceptionNotes: "MB2根管遗漏，后续补录", isCompleted: true },
+      { id: "tn4", step: "冲洗", completedAt: "2026-06-10 11:30", operator: "李助理", keyParams: "5.25%NaClO冲洗，超声荡洗3分钟", exceptionNotes: "", isCompleted: true },
+      { id: "tn5", step: "封药", completedAt: "2026-06-10 11:45", operator: "张医生", keyParams: "Ca(OH)2糊剂封药，暂封膏封闭", exceptionNotes: "", isCompleted: true },
+      { id: "tn6", step: "充填", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+    ],
+  },
+  {
+    id: "tl2",
+    toothPosition: "#11",
+    createdAt: "2026-06-08",
+    nodes: [
+      { id: "tn7", step: "开髓", completedAt: "2026-06-08 14:00", operator: "王医生", keyParams: "外伤牙，局麻下开髓", exceptionNotes: "牙体变色明显，冠部折裂", isCompleted: true },
+      { id: "tn8", step: "测长", completedAt: "2026-06-08 14:20", operator: "王医生", keyParams: "单根管 23.0mm", exceptionNotes: "", isCompleted: true },
+      { id: "tn9", step: "根管预备", completedAt: "2026-06-08 14:45", operator: "王医生", keyParams: "主尖锉#40，镍钛器械预备", exceptionNotes: "", isCompleted: true },
+      { id: "tn10", step: "冲洗", completedAt: "2026-06-08 15:00", operator: "李助理", keyParams: "生理盐水+EDTA冲洗", exceptionNotes: "", isCompleted: true },
+      { id: "tn11", step: "封药", completedAt: "2026-06-08 15:10", operator: "王医生", keyParams: "Ca(OH)2封药一周", exceptionNotes: "", isCompleted: true },
+      { id: "tn12", step: "充填", completedAt: "2026-06-15 10:30", operator: "王医生", keyParams: "冷侧压充填，AH糊剂", exceptionNotes: "术后片显示恰填", isCompleted: true },
+    ],
+  },
+  {
+    id: "tl3",
+    toothPosition: "#46",
+    createdAt: "2026-06-12",
+    nodes: [
+      { id: "tn13", step: "开髓", completedAt: "2026-06-12 09:00", operator: "李医生", keyParams: "急性牙髓炎，局麻下开髓引流", exceptionNotes: "脓液溢出，需充分引流", isCompleted: true },
+      { id: "tn14", step: "测长", completedAt: "2026-06-12 09:30", operator: "李医生", keyParams: "MB 19.0mm, ML 18.5mm", exceptionNotes: "近中双根管，需复查确认", isCompleted: true },
+      { id: "tn15", step: "根管预备", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn16", step: "冲洗", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn17", step: "封药", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn18", step: "充填", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+    ],
+  },
+  {
+    id: "tl4",
+    toothPosition: "#14",
+    createdAt: "2026-06-15",
+    nodes: [
+      { id: "tn19", step: "开髓", completedAt: "2026-06-15 16:00", operator: "张医生", keyParams: "深龋穿髓，冠髓已坏死", exceptionNotes: "开髓孔通畅，出血少", isCompleted: true },
+      { id: "tn20", step: "测长", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn21", step: "根管预备", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn22", step: "冲洗", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn23", step: "封药", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+      { id: "tn24", step: "充填", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
+    ],
+  },
+];
 
 const initialWorkingLengths: WorkingLengthRecord[] = [
   {
@@ -305,7 +423,8 @@ const initialWorkingLengths: WorkingLengthRecord[] = [
   },
 ];
 
-const steps = ["开髓", "测长", "根管预备", "冲洗", "封药", "充填"];
+const treatmentSteps: TreatmentStep[] = ["开髓", "测长", "根管预备", "冲洗", "封药", "充填"];
+const steps = treatmentSteps;
 
 const stageColors: Record<string, string> = {
   "开髓": "#ea580c",
@@ -379,6 +498,15 @@ function App() {
     editingId: null,
   });
   const [canalDraftError, setCanalDraftError] = useState<string>("");
+  const [timelines, setTimelines] = useState<TreatmentTimeline[]>(initialTimelines);
+  const [selectedToothPosition, setSelectedToothPosition] = useState<string | null>(null);
+  const [timelineDraft, setTimelineDraft] = useState<TimelineDraft>({
+    toothPosition: "",
+    editingNodeId: null,
+    node: null,
+  });
+  const [timelineDraftError, setTimelineDraftError] = useState<string>("");
+  const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
 
   const metricValues = calculateMetrics(records, activeStage);
   const filteredRecords = activeStage
@@ -574,6 +702,106 @@ function App() {
       ),
     }));
   };
+
+  const findTimeline = (toothPosition: string): TreatmentTimeline | undefined =>
+    timelines.find(t => t.toothPosition === toothPosition);
+
+  const getOrCreateTimeline = (toothPosition: string): TreatmentTimeline => {
+    const existing = findTimeline(toothPosition);
+    if (existing) return existing;
+    const newTimeline = createInitialTimeline(toothPosition);
+    setTimelines(prev => [newTimeline, ...prev]);
+    return newTimeline;
+  };
+
+  const openDetailModal = (toothPosition: string) => {
+    getOrCreateTimeline(toothPosition);
+    setSelectedToothPosition(toothPosition);
+    setShowDetailModal(true);
+  };
+
+  const closeDetailModal = () => {
+    setShowDetailModal(false);
+    setSelectedToothPosition(null);
+    setTimelineDraft({ toothPosition: "", editingNodeId: null, node: null });
+    setTimelineDraftError("");
+  };
+
+  const startEditingNode = (timelineId: string, node: TimelineNode) => {
+    setTimelineDraft({
+      toothPosition: timelineId,
+      editingNodeId: node.id,
+      node: { ...node },
+    });
+    setTimelineDraftError("");
+  };
+
+  const cancelEditingNode = () => {
+    setTimelineDraft({ toothPosition: "", editingNodeId: null, node: null });
+    setTimelineDraftError("");
+  };
+
+  const updateDraftNode = (field: keyof TimelineNode, value: string | boolean) => {
+    if (!timelineDraft.node) return;
+    setTimelineDraft(prev => ({
+      ...prev,
+      node: prev.node ? { ...prev.node, [field]: value } : null,
+    }));
+    if (timelineDraftError) setTimelineDraftError("");
+  };
+
+  const saveNode = () => {
+    if (!timelineDraft.node || !selectedToothPosition) {
+      setTimelineDraftError("无法保存：缺少必要信息");
+      return;
+    }
+
+    const node = timelineDraft.node;
+    if (node.isCompleted && !node.completedAt.trim()) {
+      setTimelineDraftError("已完成节点请填写完成时间");
+      return;
+    }
+    if (node.isCompleted && !node.operator.trim()) {
+      setTimelineDraftError("已完成节点请填写操作者");
+      return;
+    }
+
+    setTimelines(prev => prev.map(timeline => {
+      if (timeline.toothPosition !== selectedToothPosition) return timeline;
+      return {
+        ...timeline,
+        nodes: timeline.nodes.map(n =>
+          n.id === node.id ? node : n
+        ),
+      };
+    }));
+
+    cancelEditingNode();
+  };
+
+  const toggleNodeCompletion = (timelineId: string, nodeId: string) => {
+    setTimelines(prev => prev.map(timeline => {
+      if (timeline.toothPosition !== timelineId) return timeline;
+      return {
+        ...timeline,
+        nodes: timeline.nodes.map(n => {
+          if (n.id === nodeId) {
+            const isCompleted = !n.isCompleted;
+            return {
+              ...n,
+              isCompleted,
+              completedAt: isCompleted && !n.completedAt
+                ? new Date().toISOString().replace("T", " ").slice(0, 16)
+                : n.completedAt,
+            };
+          }
+          return n;
+        }),
+      };
+    }));
+  };
+
+  const resetTimelineDraftError = () => setTimelineDraftError("");
 
   return (
     <main className="app-shell">
@@ -773,8 +1001,10 @@ function App() {
               const confirmedCount = wlRecord
                 ? wlRecord.entries.filter(e => e.confirmedStatus === "已确认").length
                 : 0;
+              const timeline = findTimeline(record[0]);
+              const currentStepIdx = timeline ? getCurrentStepIndex(timeline.nodes) : -1;
               return (
-                <article key={record.join("-") + index} className="record-card">
+                <article key={record.join("-") + index} className="record-card" onClick={() => openDetailModal(record[0])}>
                   <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
                   <div className="record-content">
                     <div className="record-header">
@@ -787,6 +1017,61 @@ function App() {
                       </span>
                     </div>
                     <p>{record.slice(1, 4).join(" · ")}</p>
+                    {timeline && (
+                      <div className="timeline-progress">
+                        <div className="timeline-progress-track">
+                          {timeline.nodes.map((node, idx) => (
+                            <React.Fragment key={node.id}>
+                              <div
+                                className={`timeline-progress-dot ${
+                                  idx < currentStepIdx
+                                    ? "timeline-progress-dot--done"
+                                    : idx === currentStepIdx
+                                    ? "timeline-progress-dot--current"
+                                    : "timeline-progress-dot--pending"
+                                }`}
+                                style={{
+                                  "--stage-color":
+                                    idx < currentStepIdx || idx === currentStepIdx
+                                      ? stageColors[node.step]
+                                      : undefined,
+                                }}
+                                title={`${node.step}${node.isCompleted ? " (已完成)" : ""}`}
+                              />
+                              {idx < timeline.nodes.length - 1 && (
+                                <div
+                                  className={`timeline-progress-line ${
+                                    idx < currentStepIdx
+                                      ? "timeline-progress-line--done"
+                                      : "timeline-progress-line--pending"
+                                  }`}
+                                  style={{
+                                    "--stage-color":
+                                      idx < currentStepIdx
+                                        ? stageColors[node.step]
+                                        : undefined,
+                                  }}
+                                />
+                              )}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                        <div className="timeline-progress-labels">
+                          {timeline.nodes.map((node, idx) => (
+                            <span
+                              key={node.id}
+                              className={`timeline-progress-label ${
+                                idx === currentStepIdx
+                                  ? "timeline-progress-label--active"
+                                  : ""
+                              }`}
+                            >
+                              {node.step}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {wlRecord && wlRecord.entries.length > 0 && (
                       <div className="wl-summary">
                         <span className="wl-summary-label">
@@ -1175,6 +1460,202 @@ function App() {
           )}
         </div>
       </section>
+
+      {showDetailModal && selectedToothPosition && (
+        <div className="modal-overlay" onClick={closeDetailModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">根管治疗流程时间线</p>
+                <h2 className="modal-title">
+                  {selectedToothPosition} 治疗时间线
+                </h2>
+              </div>
+              <button className="modal-close" onClick={closeDetailModal}>×</button>
+            </div>
+            {(() => {
+              const timeline = findTimeline(selectedToothPosition);
+              if (!timeline) return null;
+              const currentIdx = getCurrentStepIndex(timeline.nodes);
+              const completedCount = timeline.nodes.filter(n => n.isCompleted).length;
+              return (
+                <>
+                  <div className="modal-stats">
+                    <div className="modal-stat">
+                      <strong>{completedCount}/{timeline.nodes.length}</strong>
+                      <span>已完成步骤</span>
+                    </div>
+                    <div className="modal-stat">
+                      <strong>{timeline.nodes[currentIdx]?.step || "-"}</strong>
+                      <span>当前阶段</span>
+                    </div>
+                    <div className="modal-stat">
+                      <strong>{timeline.createdAt}</strong>
+                      <span>创建日期</span>
+                    </div>
+                  </div>
+                  <div className="timeline-detail">
+                    {timeline.nodes.map((node, idx) => {
+                      const isEditing = timelineDraft.editingNodeId === node.id;
+                      return (
+                        <div
+                          key={node.id}
+                          className={`timeline-detail-item ${
+                            node.isCompleted
+                              ? "timeline-detail-item--completed"
+                              : idx === currentIdx
+                              ? "timeline-detail-item--current"
+                              : "timeline-detail-item--pending"
+                          }`}
+                        >
+                          <div className="timeline-detail-left">
+                            <div
+                              className="timeline-detail-dot"
+                              style={{
+                                "--stage-color": stageColors[node.step],
+                              }}
+                            >
+                              {node.isCompleted ? "✓" : idx + 1}
+                            </div>
+                            {idx < timeline.nodes.length - 1 && (
+                              <div
+                                className={`timeline-detail-line ${
+                                  node.isCompleted ? "timeline-detail-line--done" : ""
+                                }`}
+                                style={{
+                                  "--stage-color": stageColors[node.step],
+                                }}
+                              />
+                            )}
+                          </div>
+                          <div className="timeline-detail-body">
+                            <div className="timeline-detail-header">
+                              <h3
+                                className="timeline-detail-step"
+                                style={{
+                                  "--stage-color": stageColors[node.step],
+                                }}
+                              >
+                                {node.step}
+                              </h3>
+                              <div className="timeline-detail-actions">
+                                <label className="timeline-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={node.isCompleted}
+                                    onChange={() => toggleNodeCompletion(selectedToothPosition, node.id)}
+                                  />
+                                  <span>{node.isCompleted ? "已完成" : "未完成"}</span>
+                                </label>
+                                {!isEditing && (
+                                  <button
+                                    className="timeline-edit-btn"
+                                    onClick={() => startEditingNode(selectedToothPosition, node)}
+                                  >
+                                    编辑
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {isEditing && timelineDraft.node ? (
+                              <div className="timeline-edit-form">
+                                <div className="form-grid">
+                                  <label>
+                                    <span>完成时间</span>
+                                    <input
+                                      type="text"
+                                      placeholder="例：2026-06-17 10:30"
+                                      value={timelineDraft.node.completedAt}
+                                      onChange={(e) => updateDraftNode("completedAt", e.target.value)}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>操作者</span>
+                                    <input
+                                      placeholder="例：张医生"
+                                      value={timelineDraft.node.operator}
+                                      onChange={(e) => updateDraftNode("operator", e.target.value)}
+                                    />
+                                  </label>
+                                  <label className="full-width">
+                                    <span>关键参数</span>
+                                    <textarea
+                                      placeholder="例：MB 19.5mm，主尖锉#30，5.25%NaClO冲洗"
+                                      value={timelineDraft.node.keyParams}
+                                      onChange={(e) => updateDraftNode("keyParams", e.target.value)}
+                                      rows={2}
+                                    />
+                                  </label>
+                                  <label className="full-width">
+                                    <span>异常备注</span>
+                                    <textarea
+                                      placeholder="例：MB2根管遗漏，出血明显，需后续处理"
+                                      value={timelineDraft.node.exceptionNotes}
+                                      onChange={(e) => updateDraftNode("exceptionNotes", e.target.value)}
+                                      rows={2}
+                                    />
+                                  </label>
+                                </div>
+                                {timelineDraftError && (
+                                  <p className="error-text">{timelineDraftError}</p>
+                                )}
+                                <div className="form-actions">
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={cancelEditingNode}
+                                  >
+                                    取消
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="primary-action"
+                                    onClick={saveNode}
+                                  >
+                                    保存
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                {node.isCompleted && (
+                                  <div className="timeline-detail-info">
+                                    <div className="timeline-info-row">
+                                      <span className="timeline-info-label">完成时间：</span>
+                                      <span className="timeline-info-value">{node.completedAt || "-"}</span>
+                                    </div>
+                                    <div className="timeline-info-row">
+                                      <span className="timeline-info-label">操作者：</span>
+                                      <span className="timeline-info-value">{node.operator || "-"}</span>
+                                    </div>
+                                    {node.keyParams && (
+                                      <div className="timeline-info-row">
+                                        <span className="timeline-info-label">关键参数：</span>
+                                        <span className="timeline-info-value">{node.keyParams}</span>
+                                      </div>
+                                    )}
+                                    {node.exceptionNotes && (
+                                      <div className="timeline-info-row timeline-info-row--warning">
+                                        <span className="timeline-info-label">异常备注：</span>
+                                        <span className="timeline-info-value">{node.exceptionNotes}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
