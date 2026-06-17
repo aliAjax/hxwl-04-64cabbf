@@ -875,6 +875,7 @@ function App() {
           ...p,
           caseId: selectedCaseId,
           patientName: updatedInfo.patientName || p.patientName,
+          phone: updatedInfo.phone,
           toothPosition: updatedInfo.toothPosition,
         };
       }
