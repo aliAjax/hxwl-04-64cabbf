@@ -301,71 +301,38 @@ function createInitialTimeline(toothPosition: string): TreatmentTimeline {
 
 function getCurrentStepIndex(nodes: TimelineNode[]): number {
   for (let i = 0; i < nodes.length; i++) {
-    if (!nodes[i].isCompleted) {
-      return i;
-    }
+    if (!nodes[i].isCompleted) return i;
   }
   return nodes.length - 1;
 }
 
-function getCurrentStep(nodes: TimelineNode[]): TreatmentStep {
-  return nodes[getCurrentStepIndex(nodes)].step;
+function buildTimelineForRecord(
+  id: string,
+  toothPosition: string,
+  currentStep: string,
+  detail: string,
+  createdAt: string,
+): TreatmentTimeline {
+  const stepIdx = treatmentSteps.indexOf(currentStep as TreatmentStep);
+  const nodes: TimelineNode[] = treatmentSteps.map((step, idx) => {
+    const isCompleted = stepIdx >= 0 ? idx < stepIdx : false;
+    const isCurrent = step === currentStep;
+    return {
+      id: `${id}_tn${idx + 1}`,
+      step,
+      completedAt: isCompleted ? `${createdAt} ${String(9 + idx).padStart(2, "0")}:00` : "",
+      operator: isCompleted ? "张医生" : "",
+      keyParams: isCompleted ? detail : "",
+      exceptionNotes: "",
+      isCompleted: isCompleted || isCurrent,
+    };
+  });
+  return { id, toothPosition, nodes, createdAt };
 }
 
-const initialTimelines: TreatmentTimeline[] = [
-  {
-    id: "tl1",
-    toothPosition: "#36",
-    createdAt: "2026-06-10",
-    nodes: [
-      { id: "tn1", step: "开髓", completedAt: "2026-06-10 09:30", operator: "张医生", keyParams: "局麻下开髓，冠髓切除，开髓孔通畅", exceptionNotes: "出血明显，止血耗时较长", isCompleted: true },
-      { id: "tn2", step: "测长", completedAt: "2026-06-10 10:15", operator: "张医生", keyParams: "MB 19.5mm, ML 18.5mm, DB 20.0mm", exceptionNotes: "DB根管疑似钙化，需后续确认", isCompleted: true },
-      { id: "tn3", step: "根管预备", completedAt: "2026-06-10 11:00", operator: "张医生", keyParams: "主尖锉#30，预备至根尖狭窄部", exceptionNotes: "MB2根管遗漏，后续补录", isCompleted: true },
-      { id: "tn4", step: "冲洗", completedAt: "2026-06-10 11:30", operator: "李助理", keyParams: "5.25%NaClO冲洗，超声荡洗3分钟", exceptionNotes: "", isCompleted: true },
-      { id: "tn5", step: "封药", completedAt: "2026-06-10 11:45", operator: "张医生", keyParams: "Ca(OH)2糊剂封药，暂封膏封闭", exceptionNotes: "", isCompleted: true },
-      { id: "tn6", step: "充填", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-    ],
-  },
-  {
-    id: "tl2",
-    toothPosition: "#11",
-    createdAt: "2026-06-08",
-    nodes: [
-      { id: "tn7", step: "开髓", completedAt: "2026-06-08 14:00", operator: "王医生", keyParams: "外伤牙，局麻下开髓", exceptionNotes: "牙体变色明显，冠部折裂", isCompleted: true },
-      { id: "tn8", step: "测长", completedAt: "2026-06-08 14:20", operator: "王医生", keyParams: "单根管 23.0mm", exceptionNotes: "", isCompleted: true },
-      { id: "tn9", step: "根管预备", completedAt: "2026-06-08 14:45", operator: "王医生", keyParams: "主尖锉#40，镍钛器械预备", exceptionNotes: "", isCompleted: true },
-      { id: "tn10", step: "冲洗", completedAt: "2026-06-08 15:00", operator: "李助理", keyParams: "生理盐水+EDTA冲洗", exceptionNotes: "", isCompleted: true },
-      { id: "tn11", step: "封药", completedAt: "2026-06-08 15:10", operator: "王医生", keyParams: "Ca(OH)2封药一周", exceptionNotes: "", isCompleted: true },
-      { id: "tn12", step: "充填", completedAt: "2026-06-15 10:30", operator: "王医生", keyParams: "冷侧压充填，AH糊剂", exceptionNotes: "术后片显示恰填", isCompleted: true },
-    ],
-  },
-  {
-    id: "tl3",
-    toothPosition: "#46",
-    createdAt: "2026-06-12",
-    nodes: [
-      { id: "tn13", step: "开髓", completedAt: "2026-06-12 09:00", operator: "李医生", keyParams: "急性牙髓炎，局麻下开髓引流", exceptionNotes: "脓液溢出，需充分引流", isCompleted: true },
-      { id: "tn14", step: "测长", completedAt: "2026-06-12 09:30", operator: "李医生", keyParams: "MB 19.0mm, ML 18.5mm", exceptionNotes: "近中双根管，需复查确认", isCompleted: true },
-      { id: "tn15", step: "根管预备", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn16", step: "冲洗", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn17", step: "封药", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn18", step: "充填", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-    ],
-  },
-  {
-    id: "tl4",
-    toothPosition: "#14",
-    createdAt: "2026-06-15",
-    nodes: [
-      { id: "tn19", step: "开髓", completedAt: "2026-06-15 16:00", operator: "张医生", keyParams: "深龋穿髓，冠髓已坏死", exceptionNotes: "开髓孔通畅，出血少", isCompleted: true },
-      { id: "tn20", step: "测长", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn21", step: "根管预备", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn22", step: "冲洗", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn23", step: "封药", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-      { id: "tn24", step: "充填", completedAt: "", operator: "", keyParams: "", exceptionNotes: "", isCompleted: false },
-    ],
-  },
-];
+const initialTimelines: TreatmentTimeline[] = project.records.map((r, i) =>
+  buildTimelineForRecord(`tl${i + 1}`, r[0], r[2], r[3], "2026-06-10")
+);
 
 const initialWorkingLengths: WorkingLengthRecord[] = [
   {
@@ -566,6 +533,18 @@ function App() {
 
     setRecords(prev => [newRecord, ...prev]);
 
+    const existingTimeline = findTimeline(formData.toothPosition.trim());
+    if (!existingTimeline) {
+      const newTimeline = buildTimelineForRecord(
+        `tl_${Date.now()}`,
+        formData.toothPosition.trim(),
+        formData.currentStep,
+        details.join("，") || "无附加信息",
+        new Date().toISOString().split("T")[0],
+      );
+      setTimelines(prev => [newTimeline, ...prev]);
+    }
+
     if (formData.followUpDate) {
       const newPlan: FollowUpPlan = {
         id: `fp_${Date.now()}`,
@@ -601,14 +580,6 @@ function App() {
 
   const findWorkingLength = (toothPosition: string): WorkingLengthRecord | undefined =>
     workingLengths.find(w => w.toothPosition === toothPosition);
-
-  const summarizeCanal = (entry: CanalEntry): string => {
-    const lengthPart = entry.measuredLength ? `${entry.measuredLength}mm` : "未填";
-    const statusMark = entry.confirmedStatus === "已确认" ? "✓"
-      : entry.confirmedStatus === "需重测" ? "↻"
-      : "…";
-    return `${entry.canalName || "未命名"} ${lengthPart}${statusMark}`;
-  };
 
   const addCanalEntry = () => {
     setCanalDraft(prev => ({ ...prev, entries: [...prev.entries, createEmptyCanalEntry()] }));
@@ -800,8 +771,6 @@ function App() {
       };
     }));
   };
-
-  const resetTimelineDraftError = () => setTimelineDraftError("");
 
   return (
     <main className="app-shell">
