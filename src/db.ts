@@ -12,6 +12,8 @@ export interface CaseRecord {
   followUpReminder: boolean;
 }
 
+export type ContactStatus = "待联系" | "已联系" | "已确认" | "未接通" | "已取消";
+
 export interface FollowUpPlan {
   id: string;
   toothPosition: string;
@@ -19,6 +21,10 @@ export interface FollowUpPlan {
   doctor: string;
   reason: string;
   reminderEnabled: boolean;
+  contactStatus: ContactStatus;
+  contactNote: string;
+  patientName: string;
+  phone: string;
 }
 
 export type ConfirmedStatus = "待确认" | "已确认" | "需重测";
@@ -39,6 +45,8 @@ export interface WorkingLengthRecord {
   entries: CanalEntry[];
   note: string;
 }
+
+export type UserRole = "医生" | "助理" | "前台";
 
 export type TreatmentStep = "开髓" | "测长" | "根管预备" | "冲洗" | "封药" | "充填";
 
@@ -139,18 +147,18 @@ function buildTimelineForRecord(
 }
 
 const initialFollowUpPlans: FollowUpPlan[] = [
-  { id: "fp1", toothPosition: "#36", nextDate: "2026-06-14", doctor: "张医生", reason: "Ca(OH)2封药到期，需换药或根充", reminderEnabled: true },
-  { id: "fp2", toothPosition: "#46", nextDate: "2026-06-18", doctor: "李医生", reason: "近中双根管继续测长", reminderEnabled: true },
-  { id: "fp3", toothPosition: "#14", nextDate: "2026-06-20", doctor: "张医生", reason: "开髓后继续根管预备", reminderEnabled: false },
-  { id: "fp4", toothPosition: "#25", nextDate: "2026-06-19", doctor: "王医生", reason: "根管预备完成后封药评估", reminderEnabled: true },
-  { id: "fp5", toothPosition: "#37", nextDate: "2026-06-15", doctor: "李医生", reason: "冲洗后封药观察", reminderEnabled: true },
-  { id: "fp6", toothPosition: "#16", nextDate: "2026-06-17", doctor: "张医生", reason: "开髓引流后复查", reminderEnabled: false },
-  { id: "fp7", toothPosition: "#26", nextDate: "2026-06-22", doctor: "王医生", reason: "Ca(OH)2封药一周后复诊", reminderEnabled: true },
-  { id: "fp8", toothPosition: "#31", nextDate: "2026-06-25", doctor: "李医生", reason: "测长后根管预备", reminderEnabled: false },
-  { id: "fp9", toothPosition: "#47", nextDate: "2026-06-16", doctor: "张医生", reason: "弯曲根管预备复诊", reminderEnabled: true },
-  { id: "fp10", toothPosition: "#15", nextDate: "2026-06-21", doctor: "王医生", reason: "冲洗后评估封药", reminderEnabled: true },
-  { id: "fp11", toothPosition: "#45", nextDate: "2026-06-19", doctor: "李医生", reason: "根管预备后封药观察", reminderEnabled: true },
-  { id: "fp12", toothPosition: "#24", nextDate: "2026-06-18", doctor: "张医生", reason: "局麻开髓后继续治疗", reminderEnabled: false },
+  { id: "fp1", toothPosition: "#36", nextDate: "2026-06-14", doctor: "张医生", reason: "Ca(OH)2封药到期，需换药或根充", reminderEnabled: true, contactStatus: "已确认", contactNote: "患者已确认明天上午10点到诊", patientName: "王建国", phone: "138****1234" },
+  { id: "fp2", toothPosition: "#46", nextDate: "2026-06-18", doctor: "李医生", reason: "近中双根管继续测长", reminderEnabled: true, contactStatus: "待联系", contactNote: "", patientName: "李明华", phone: "139****5678" },
+  { id: "fp3", toothPosition: "#14", nextDate: "2026-06-20", doctor: "张医生", reason: "开髓后继续根管预备", reminderEnabled: false, contactStatus: "已联系", contactNote: "已电话通知，患者表示时间合适", patientName: "张秀英", phone: "136****9012" },
+  { id: "fp4", toothPosition: "#25", nextDate: "2026-06-19", doctor: "王医生", reason: "根管预备完成后封药评估", reminderEnabled: true, contactStatus: "未接通", contactNote: "两次电话未接通，稍后再试", patientName: "陈志强", phone: "137****3456" },
+  { id: "fp5", toothPosition: "#37", nextDate: "2026-06-15", doctor: "李医生", reason: "冲洗后封药观察", reminderEnabled: true, contactStatus: "待联系", contactNote: "", patientName: "刘美玲", phone: "135****7890" },
+  { id: "fp6", toothPosition: "#16", nextDate: "2026-06-17", doctor: "张医生", reason: "开髓引流后复查", reminderEnabled: false, contactStatus: "已确认", contactNote: "患者今日复诊，已安排上午号", patientName: "赵大宝", phone: "133****2345" },
+  { id: "fp7", toothPosition: "#26", nextDate: "2026-06-22", doctor: "王医生", reason: "Ca(OH)2封药一周后复诊", reminderEnabled: true, contactStatus: "待联系", contactNote: "", patientName: "孙丽娟", phone: "132****6789" },
+  { id: "fp8", toothPosition: "#31", nextDate: "2026-06-25", doctor: "李医生", reason: "测长后根管预备", reminderEnabled: false, contactStatus: "已联系", contactNote: "短信通知已发送", patientName: "周海涛", phone: "131****0123" },
+  { id: "fp9", toothPosition: "#47", nextDate: "2026-06-16", doctor: "张医生", reason: "弯曲根管预备复诊", reminderEnabled: true, contactStatus: "待联系", contactNote: "", patientName: "吴金凤", phone: "130****4567" },
+  { id: "fp10", toothPosition: "#15", nextDate: "2026-06-21", doctor: "王医生", reason: "冲洗后评估封药", reminderEnabled: true, contactStatus: "未接通", contactNote: "患者关机，明日再联系", patientName: "郑伟国", phone: "138****8901" },
+  { id: "fp11", toothPosition: "#45", nextDate: "2026-06-19", doctor: "李医生", reason: "根管预备后封药观察", reminderEnabled: true, contactStatus: "待联系", contactNote: "", patientName: "冯晓燕", phone: "139****2345" },
+  { id: "fp12", toothPosition: "#24", nextDate: "2026-06-18", doctor: "张医生", reason: "局麻开髓后继续治疗", reminderEnabled: false, contactStatus: "已取消", contactNote: "患者出差，改约下月初", patientName: "钱伟东", phone: "136****6789" },
 ];
 
 const initialTimelines: TreatmentTimeline[] = projectData.records.map((r, i) =>

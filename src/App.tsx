@@ -14,6 +14,8 @@ import {
   TreatmentStep,
   TimelineNode,
   TreatmentTimeline,
+  UserRole,
+  ContactStatus,
 } from "./db";
 
 const project = {
@@ -217,7 +219,35 @@ const initialFormData: CaseRecord = {
   followUpReminder: true,
 };
 
+const contactStatusOptions: ContactStatus[] = ["待联系", "已联系", "已确认", "未接通", "已取消"];
+
+const contactStatusColors: Record<ContactStatus, string> = {
+  "待联系": "#ea580c",
+  "已联系": "#0369a1",
+  "已确认": "#059669",
+  "未接通": "#dc2626",
+  "已取消": "#64748b",
+};
+
+const roleColors: Record<UserRole, string> = {
+  "医生": "#0369a1",
+  "助理": "#7c3aed",
+  "前台": "#ea580c",
+};
+
+const roleDescriptions: Record<UserRole, string> = {
+  "医生": "查看治疗参数与病例进展",
+  "助理": "录入治疗步骤与材料信息",
+  "前台": "管理复诊日期与联系状态",
+};
+
+interface FollowUpEditDraft {
+  id: string | null;
+  plan: FollowUpPlan | null;
+}
+
 function App() {
+  const [currentRole, setCurrentRole] = useState<UserRole>("医生");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isResetting, setIsResetting] = useState<boolean>(false);
   const [records, setRecords] = useState<string[][]>([]);
@@ -226,6 +256,7 @@ function App() {
   const [activeStage, setActiveStage] = useState<string | null>(null);
   const [followUpPlans, setFollowUpPlans] = useState<FollowUpPlan[]>([]);
   const [sortAsc, setSortAsc] = useState<boolean>(true);
+  const [contactStatusFilter, setContactStatusFilter] = useState<ContactStatus | null>(null);
   const [workingLengths, setWorkingLengths] = useState<WorkingLengthRecord[]>([]);
   const [canalDraft, setCanalDraft] = useState<CanalDraft>({
     toothPosition: "",
@@ -243,6 +274,11 @@ function App() {
   });
   const [timelineDraftError, setTimelineDraftError] = useState<string>("");
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
+  const [followUpEditDraft, setFollowUpEditDraft] = useState<FollowUpEditDraft>({
+    id: null,
+    plan: null,
+  });
+  const [showFollowUpEditModal, setShowFollowUpEditModal] = useState<boolean>(false);
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -383,6 +419,10 @@ function App() {
         doctor: formData.followUpDoctor || "待分配",
         reason: formData.followUpReason || `${formData.currentStep}后复诊`,
         reminderEnabled: formData.followUpReminder,
+        contactStatus: "待联系",
+        contactNote: "",
+        patientName: "",
+        phone: "",
       };
       setFollowUpPlans(prev => [newPlan, ...prev]);
     }
@@ -602,6 +642,50 @@ function App() {
     }));
   };
 
+  const openFollowUpEdit = (plan: FollowUpPlan) => {
+    setFollowUpEditDraft({
+      id: plan.id,
+      plan: { ...plan },
+    });
+    setShowFollowUpEditModal(true);
+  };
+
+  const closeFollowUpEdit = () => {
+    setShowFollowUpEditModal(false);
+    setFollowUpEditDraft({ id: null, plan: null });
+  };
+
+  const updateFollowUpDraft = (field: keyof FollowUpPlan, value: string | boolean) => {
+    if (!followUpEditDraft.plan) return;
+    setFollowUpEditDraft(prev => ({
+      ...prev,
+      plan: prev.plan ? { ...prev.plan, [field]: value } as FollowUpPlan : null,
+    }));
+  };
+
+  const saveFollowUpPlan = () => {
+    if (!followUpEditDraft.plan || !followUpEditDraft.id) return;
+    setFollowUpPlans(prev => prev.map(plan =>
+      plan.id === followUpEditDraft.id ? followUpEditDraft.plan! : plan
+    ));
+    closeFollowUpEdit();
+  };
+
+  const updateContactStatus = (planId: string, status: ContactStatus) => {
+    setFollowUpPlans(prev => prev.map(plan =>
+      plan.id === planId ? { ...plan, contactStatus: status } : plan
+    ));
+  };
+
+  const filteredFollowUpPlans = contactStatusFilter
+    ? followUpPlans.filter(p => p.contactStatus === contactStatusFilter)
+    : followUpPlans;
+
+  const sortedAndFilteredPlans = [...filteredFollowUpPlans].sort((a, b) => {
+    const diff = new Date(a.nextDate).getTime() - new Date(b.nextDate).getTime();
+    return sortAsc ? diff : -diff;
+  });
+
   if (isLoading) {
     return (
       <main className="app-shell">
@@ -615,11 +699,32 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="hero">
+      <section className="hero" style={{ borderLeftColor: roleColors[currentRole] }}>
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
+          <p className="eyebrow" style={{ color: roleColors[currentRole] }}>
+            {project.id} · port {project.port}
+          </p>
           <h1>{project.title}</h1>
           <p className="subtitle">{project.subtitle}</p>
+          <div className="role-switcher">
+            <span className="role-switcher-label">当前角色：</span>
+            <div className="role-tabs">
+              {(["医生", "助理", "前台"] as UserRole[]).map(role => (
+                <button
+                  key={role}
+                  className={`role-tab ${currentRole === role ? "active" : ""}`}
+                  style={currentRole === role ? {
+                    backgroundColor: roleColors[role],
+                    borderColor: roleColors[role],
+                  } as React.CSSProperties : {}}
+                  onClick={() => setCurrentRole(role)}
+                >
+                  {role}
+                  <span className="role-tab-desc">{roleDescriptions[role]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <div className="hero-actions">
           <button
@@ -667,153 +772,288 @@ function App() {
 
       <section className="workspace">
         <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
+          <h2>角色切换</h2>
+          <div className="chips role-chips">
+            {(["医生", "助理", "前台"] as UserRole[]).map((role) => (
+              <button
+                key={role}
+                className={currentRole === role ? "role-chip-active" : ""}
+                style={currentRole === role ? {
+                  backgroundColor: roleColors[role],
+                  borderColor: roleColors[role],
+                  color: "#fff",
+                } as React.CSSProperties : {}}
+                onClick={() => setCurrentRole(role)}
+              >
+                {role}
+              </button>
             ))}
           </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
+          {currentRole !== "前台" && (
+            <>
+              <h2>阶段筛选</h2>
+              <div className="chips muted">
+                {project.filters.map((filter: string) => (
+                  <button key={filter}>{filter}</button>
+                ))}
+              </div>
+            </>
+          )}
+          {currentRole === "前台" && (
+            <>
+              <h2>联系状态</h2>
+              <div className="chips muted">
+                <button
+                  className={contactStatusFilter === null ? "active" : ""}
+                  onClick={() => setContactStatusFilter(null)}
+                >
+                  全部
+                </button>
+                {contactStatusOptions.map((status) => (
+                  <button
+                    key={status}
+                    className={contactStatusFilter === status ? "active" : ""}
+                    style={contactStatusFilter === status ? {
+                      color: contactStatusColors[status],
+                      borderColor: contactStatusColors[status],
+                    } as React.CSSProperties : {}}
+                    onClick={() => setContactStatusFilter(status)}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </aside>
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>病例录入</h2>
-            </div>
-          </div>
-          <div className="form-grid">
-            <label>
-              <span>牙位 <span className="required">*</span></span>
-              <input
-                placeholder="例如：#36、#11"
-                value={formData.toothPosition}
-                onChange={(e) => handleInputChange("toothPosition", e.target.value)}
-                className={errors.toothPosition ? "input-error" : ""}
-              />
-              {errors.toothPosition && <span className="error-text">{errors.toothPosition}</span>}
-            </label>
-            <label>
-              <span>诊断 <span className="required">*</span></span>
-              <input
-                placeholder="例如：慢性根尖周炎"
-                value={formData.diagnosis}
-                onChange={(e) => handleInputChange("diagnosis", e.target.value)}
-                className={errors.diagnosis ? "input-error" : ""}
-              />
-              {errors.diagnosis && <span className="error-text">{errors.diagnosis}</span>}
-            </label>
-            <label>
-              <span>当前步骤 <span className="required">*</span></span>
-              <select
-                value={formData.currentStep}
-                onChange={(e) => handleInputChange("currentStep", e.target.value)}
-                className={errors.currentStep ? "input-error" : ""}
-              >
-                <option value="">请选择步骤</option>
-                {steps.map(step => (
-                  <option key={step} value={step}>{step}</option>
-                ))}
-              </select>
-              {errors.currentStep && <span className="error-text">{errors.currentStep}</span>}
-            </label>
-            <label>
-              <span>工作长度</span>
-              <input
-                placeholder="例如：MB 19.5mm"
-                value={formData.workingLength}
-                onChange={(e) => handleInputChange("workingLength", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>主尖锉号</span>
-              <input
-                placeholder="例如：#30"
-                value={formData.mainFileNumber}
-                onChange={(e) => handleInputChange("mainFileNumber", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>封药情况</span>
-              <input
-                placeholder="例如：Ca(OH)2"
-                value={formData.medication}
-                onChange={(e) => handleInputChange("medication", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>复诊日期</span>
-              <input
-                type="date"
-                value={formData.followUpDate}
-                onChange={(e) => handleInputChange("followUpDate", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>负责医生</span>
-              <input
-                placeholder="例如：张医生"
-                value={formData.followUpDoctor}
-                onChange={(e) => handleInputChange("followUpDoctor", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>复诊原因</span>
-              <input
-                placeholder="例如：封药到期换药"
-                value={formData.followUpReason}
-                onChange={(e) => handleInputChange("followUpReason", e.target.value)}
-              />
-            </label>
-            <label className="checkbox-label">
-              <span>复诊提醒</span>
-              <div className="toggle-wrapper">
-                <input
-                  type="checkbox"
-                  checked={formData.followUpReminder}
-                  onChange={(e) => setFormData(prev => ({ ...prev, followUpReminder: e.target.checked }))}
-                  className="toggle-checkbox"
-                />
-                <span className="toggle-track">
-                  <span className="toggle-thumb" />
-                </span>
-                <span className="toggle-text">{formData.followUpReminder ? "已开启" : "已关闭"}</span>
+        {currentRole === "医生" && (
+          <section className="panel doctor-panel">
+            <div className="section-heading">
+              <div>
+                <p className="section-eyebrow-doctor">医生工作台</p>
+                <h2>治疗参数总览</h2>
               </div>
-            </label>
-            <label className="full-width">
-              <span>备注</span>
-              <textarea
-                placeholder="其他需要记录的信息"
-                value={formData.remark}
-                onChange={(e) => handleInputChange("remark", e.target.value)}
-                rows={3}
-              />
-            </label>
-          </div>
-          <div className="form-actions">
-            <button type="button" onClick={handleClear} className="secondary-action">清空</button>
-            <button type="button" onClick={handleSubmit} className="primary-action">提交病例</button>
-          </div>
-        </section>
+              <span className="role-badge" style={{ backgroundColor: roleColors["医生"] }}>
+                医生视图
+              </span>
+            </div>
+            <div className="doctor-summary">
+              <div className="doctor-summary-item">
+                <strong>{records.length}</strong>
+                <span>在管病例</span>
+              </div>
+              <div className="doctor-summary-item">
+                <strong>{workingLengths.length}</strong>
+                <span>已记录工作长度</span>
+              </div>
+              <div className="doctor-summary-item">
+                <strong>{followUpPlans.filter(p => p.contactStatus === "已确认").length}</strong>
+                <span>已确认复诊</span>
+              </div>
+              <div className="doctor-summary-item">
+                <strong>{records.filter(r => r[2] === "充填").length}</strong>
+                <span>已完成充填</span>
+              </div>
+            </div>
+            <p className="doctor-hint">
+              💡 您可以在下方查看所有病例记录，点击病例卡片可查看完整治疗时间线和工作长度详情。
+            </p>
+          </section>
+        )}
+
+        {currentRole === "助理" && (
+          <section className="panel assistant-panel">
+            <div className="section-heading">
+              <div>
+                <p className="section-eyebrow-assistant">助理工作台</p>
+                <h2>病例录入</h2>
+              </div>
+              <span className="role-badge" style={{ backgroundColor: roleColors["助理"] }}>
+                助理视图
+              </span>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span>牙位 <span className="required">*</span></span>
+                <input
+                  placeholder="例如：#36、#11"
+                  value={formData.toothPosition}
+                  onChange={(e) => handleInputChange("toothPosition", e.target.value)}
+                  className={errors.toothPosition ? "input-error" : ""}
+                />
+                {errors.toothPosition && <span className="error-text">{errors.toothPosition}</span>}
+              </label>
+              <label>
+                <span>诊断 <span className="required">*</span></span>
+                <input
+                  placeholder="例如：慢性根尖周炎"
+                  value={formData.diagnosis}
+                  onChange={(e) => handleInputChange("diagnosis", e.target.value)}
+                  className={errors.diagnosis ? "input-error" : ""}
+                />
+                {errors.diagnosis && <span className="error-text">{errors.diagnosis}</span>}
+              </label>
+              <label>
+                <span>当前步骤 <span className="required">*</span></span>
+                <select
+                  value={formData.currentStep}
+                  onChange={(e) => handleInputChange("currentStep", e.target.value)}
+                  className={errors.currentStep ? "input-error" : ""}
+                >
+                  <option value="">请选择步骤</option>
+                  {steps.map(step => (
+                    <option key={step} value={step}>{step}</option>
+                  ))}
+                </select>
+                {errors.currentStep && <span className="error-text">{errors.currentStep}</span>}
+              </label>
+              <label>
+                <span>工作长度</span>
+                <input
+                  placeholder="例如：MB 19.5mm"
+                  value={formData.workingLength}
+                  onChange={(e) => handleInputChange("workingLength", e.target.value)}
+                />
+              </label>
+              <label>
+                <span>主尖锉号</span>
+                <input
+                  placeholder="例如：#30"
+                  value={formData.mainFileNumber}
+                  onChange={(e) => handleInputChange("mainFileNumber", e.target.value)}
+                />
+              </label>
+              <label>
+                <span>封药情况</span>
+                <input
+                  placeholder="例如：Ca(OH)2"
+                  value={formData.medication}
+                  onChange={(e) => handleInputChange("medication", e.target.value)}
+                />
+              </label>
+              <label>
+                <span>复诊日期</span>
+                <input
+                  type="date"
+                  value={formData.followUpDate}
+                  onChange={(e) => handleInputChange("followUpDate", e.target.value)}
+                />
+              </label>
+              <label>
+                <span>负责医生</span>
+                <input
+                  placeholder="例如：张医生"
+                  value={formData.followUpDoctor}
+                  onChange={(e) => handleInputChange("followUpDoctor", e.target.value)}
+                />
+              </label>
+              <label>
+                <span>复诊原因</span>
+                <input
+                  placeholder="例如：封药到期换药"
+                  value={formData.followUpReason}
+                  onChange={(e) => handleInputChange("followUpReason", e.target.value)}
+                />
+              </label>
+              <label className="checkbox-label">
+                <span>复诊提醒</span>
+                <div className="toggle-wrapper">
+                  <input
+                    type="checkbox"
+                    checked={formData.followUpReminder}
+                    onChange={(e) => setFormData(prev => ({ ...prev, followUpReminder: e.target.checked }))}
+                    className="toggle-checkbox"
+                  />
+                  <span className="toggle-track">
+                    <span className="toggle-thumb" />
+                  </span>
+                  <span className="toggle-text">{formData.followUpReminder ? "已开启" : "已关闭"}</span>
+                </div>
+              </label>
+              <label className="full-width">
+                <span>备注</span>
+                <textarea
+                  placeholder="其他需要记录的信息"
+                  value={formData.remark}
+                  onChange={(e) => handleInputChange("remark", e.target.value)}
+                  rows={3}
+                />
+              </label>
+            </div>
+            <div className="form-actions">
+              <button type="button" onClick={handleClear} className="secondary-action">清空</button>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                className="primary-action"
+                style={{ backgroundColor: roleColors["助理"], borderColor: roleColors["助理"] }}
+              >
+                提交病例
+              </button>
+            </div>
+            <p className="assistant-hint">
+              💡 您还可以在下方「工作长度录入」区域详细记录各根管的测量数据和材料使用情况。
+            </p>
+          </section>
+        )}
+
+        {currentRole === "前台" && (
+          <section className="panel reception-panel">
+            <div className="section-heading">
+              <div>
+                <p className="section-eyebrow-reception">前台工作台</p>
+                <h2>复诊协调</h2>
+              </div>
+              <span className="role-badge" style={{ backgroundColor: roleColors["前台"] }}>
+                前台视图
+              </span>
+            </div>
+            <div className="reception-stats">
+              <div className="reception-stat" style={{ borderColor: contactStatusColors["待联系"] }}>
+                <strong style={{ color: contactStatusColors["待联系"] }}>
+                  {followUpPlans.filter(p => p.contactStatus === "待联系").length}
+                </strong>
+                <span>待联系</span>
+              </div>
+              <div className="reception-stat" style={{ borderColor: contactStatusColors["已联系"] }}>
+                <strong style={{ color: contactStatusColors["已联系"] }}>
+                  {followUpPlans.filter(p => p.contactStatus === "已联系").length}
+                </strong>
+                <span>已联系</span>
+              </div>
+              <div className="reception-stat" style={{ borderColor: contactStatusColors["已确认"] }}>
+                <strong style={{ color: contactStatusColors["已确认"] }}>
+                  {followUpPlans.filter(p => p.contactStatus === "已确认").length}
+                </strong>
+                <span>已确认</span>
+              </div>
+              <div className="reception-stat" style={{ borderColor: contactStatusColors["未接通"] }}>
+                <strong style={{ color: contactStatusColors["未接通"] }}>
+                  {followUpPlans.filter(p => p.contactStatus === "未接通").length}
+                </strong>
+                <span>未接通</span>
+              </div>
+            </div>
+            <p className="reception-hint">
+              💡 您可以在下方「复诊计划」区域管理所有复诊安排，更新联系状态和患者信息。
+            </p>
+          </section>
+        )}
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>{activeStage ? `${activeStage}阶段` : "全部病例"}</p>
-            <h2>
-              {activeStage ? `${activeStage}病例` : "近期记录"}
-              <span className="record-total">共 {filteredRecords.length} 条</span>
-            </h2>
+      {currentRole !== "前台" && (
+        <section className="records panel">
+          <div className="section-heading">
+            <div>
+              <p>{activeStage ? `${activeStage}阶段` : "全部病例"}</p>
+              <h2>
+                {currentRole === "医生" ? "病例进展" : activeStage ? `${activeStage}病例` : "近期记录"}
+                <span className="record-total">共 {filteredRecords.length} 条</span>
+              </h2>
+            </div>
+            <button>导出摘要</button>
           </div>
-          <button>导出摘要</button>
-        </div>
         <div className="record-list">
           {filteredRecords.length > 0 ? (
             filteredRecords.map((record: string[], index: number) => {
@@ -937,9 +1177,11 @@ function App() {
             </div>
           )}
         </div>
-      </section>
+        </section>
+      )}
 
-      <section className="wl-section panel">
+      {currentRole !== "前台" && (
+        <section className="wl-section panel">
         <div className="section-heading">
           <div>
             <p>根管工作长度管理</p>
@@ -1185,15 +1427,18 @@ function App() {
             </div>
           )}
         </div>
-      </section>
+        </section>
+      )}
 
-      <section className="followup-section panel">
+      <section className={`followup-section panel ${currentRole === "前台" ? "followup-section--reception" : ""}`}>
         <div className="section-heading">
           <div>
-            <p>复诊管理</p>
+            <p>{currentRole === "前台" ? "复诊协调管理" : "复诊管理"}</p>
             <h2>
-              复诊计划
-              <span className="record-total">共 {followUpPlans.length} 条</span>
+              {currentRole === "前台" ? "复诊计划与联系状态" : "复诊计划"}
+              <span className="record-total">
+                共 {currentRole === "前台" ? sortedAndFilteredPlans.length : followUpPlans.length} 条
+              </span>
             </h2>
           </div>
           <div className="followup-actions">
@@ -1220,8 +1465,8 @@ function App() {
           </div>
         </div>
         <div className="followup-kanban">
-          {sortedPlans.length > 0 ? (
-            sortedPlans.map((plan) => {
+          {(currentRole === "前台" ? sortedAndFilteredPlans : sortedPlans).length > 0 ? (
+            (currentRole === "前台" ? sortedAndFilteredPlans : sortedPlans).map((plan) => {
               const daysUntil = getDaysUntil(plan.nextDate);
               let urgencyClass = "";
               if (daysUntil < 0) urgencyClass = "followup-card--overdue";
@@ -1229,9 +1474,14 @@ function App() {
               else urgencyClass = "followup-card--normal";
 
               return (
-                <article key={plan.id} className={`followup-card ${urgencyClass}`}>
+                <article key={plan.id} className={`followup-card ${urgencyClass} ${currentRole === "前台" ? "followup-card--reception" : ""}`}>
                   <div className="followup-card-header">
-                    <h3>{plan.toothPosition}</h3>
+                    <div>
+                      <h3>{plan.toothPosition}</h3>
+                      {currentRole === "前台" && plan.patientName && (
+                        <span className="followup-patient">{plan.patientName}</span>
+                      )}
+                    </div>
                     <div className="followup-badges">
                       {daysUntil < 0 && (
                         <span className="urgency-badge urgency-badge--overdue">
@@ -1263,12 +1513,60 @@ function App() {
                       <span className="followup-label">复诊原因</span>
                       <span className="followup-value">{plan.reason}</span>
                     </div>
-                    <div className="followup-detail">
-                      <span className="followup-label">提醒状态</span>
-                      <span className={`followup-value ${plan.reminderEnabled ? "reminder-on" : "reminder-off"}`}>
-                        {plan.reminderEnabled ? "🔔 已开启" : "🔕 已关闭"}
-                      </span>
-                    </div>
+                    {currentRole !== "前台" && (
+                      <div className="followup-detail">
+                        <span className="followup-label">提醒状态</span>
+                        <span className={`followup-value ${plan.reminderEnabled ? "reminder-on" : "reminder-off"}`}>
+                          {plan.reminderEnabled ? "🔔 已开启" : "🔕 已关闭"}
+                        </span>
+                      </div>
+                    )}
+                    {currentRole === "前台" && (
+                      <>
+                        <div className="followup-detail">
+                          <span className="followup-label">联系电话</span>
+                          <span className="followup-value">{plan.phone || "未填写"}</span>
+                        </div>
+                        <div className="followup-detail full-width">
+                          <span className="followup-label">联系状态</span>
+                          <span
+                            className="contact-status-badge"
+                            style={{
+                              backgroundColor: contactStatusColors[plan.contactStatus] + "15",
+                              color: contactStatusColors[plan.contactStatus],
+                              borderColor: contactStatusColors[plan.contactStatus],
+                            }}
+                          >
+                            {plan.contactStatus}
+                          </span>
+                        </div>
+                        {plan.contactNote && (
+                          <div className="followup-detail full-width">
+                            <span className="followup-label">联系备注</span>
+                            <span className="followup-value followup-note">{plan.contactNote}</span>
+                          </div>
+                        )}
+                        <div className="followup-card-actions">
+                          <select
+                            className="contact-status-select"
+                            value={plan.contactStatus}
+                            onChange={(e) => updateContactStatus(plan.id, e.target.value as ContactStatus)}
+                            style={{ borderColor: contactStatusColors[plan.contactStatus] }}
+                          >
+                            {contactStatusOptions.map(status => (
+                              <option key={status} value={status}>{status}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="secondary-action followup-edit-btn"
+                            onClick={() => openFollowUpEdit(plan)}
+                          >
+                            编辑详情
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </article>
               );
@@ -1473,6 +1771,128 @@ function App() {
                 </>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {showFollowUpEditModal && followUpEditDraft.plan && (
+        <div className="modal-overlay" onClick={closeFollowUpEdit}>
+          <div className="modal-content modal-content--followup" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow" style={{ color: roleColors["前台"] }}>复诊计划编辑</p>
+                <h2 className="modal-title">
+                  {followUpEditDraft.plan.toothPosition} 复诊详情
+                </h2>
+              </div>
+              <button className="modal-close" onClick={closeFollowUpEdit}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-grid">
+                <label>
+                  <span>牙位</span>
+                  <input
+                    value={followUpEditDraft.plan.toothPosition}
+                    onChange={(e) => updateFollowUpDraft("toothPosition", e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>复诊日期</span>
+                  <input
+                    type="date"
+                    value={followUpEditDraft.plan.nextDate}
+                    onChange={(e) => updateFollowUpDraft("nextDate", e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>负责医生</span>
+                  <input
+                    placeholder="例如：张医生"
+                    value={followUpEditDraft.plan.doctor}
+                    onChange={(e) => updateFollowUpDraft("doctor", e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>联系状态</span>
+                  <select
+                    value={followUpEditDraft.plan.contactStatus}
+                    onChange={(e) => updateFollowUpDraft("contactStatus", e.target.value)}
+                    style={{ borderColor: contactStatusColors[followUpEditDraft.plan.contactStatus] }}
+                  >
+                    {contactStatusOptions.map(status => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>患者姓名</span>
+                  <input
+                    placeholder="请输入患者姓名"
+                    value={followUpEditDraft.plan.patientName}
+                    onChange={(e) => updateFollowUpDraft("patientName", e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>联系电话</span>
+                  <input
+                    placeholder="请输入联系电话"
+                    value={followUpEditDraft.plan.phone}
+                    onChange={(e) => updateFollowUpDraft("phone", e.target.value)}
+                  />
+                </label>
+                <label className="full-width">
+                  <span>复诊原因</span>
+                  <input
+                    placeholder="例如：封药到期换药"
+                    value={followUpEditDraft.plan.reason}
+                    onChange={(e) => updateFollowUpDraft("reason", e.target.value)}
+                  />
+                </label>
+                <label className="checkbox-label">
+                  <span>复诊提醒</span>
+                  <div className="toggle-wrapper">
+                    <input
+                      type="checkbox"
+                      checked={followUpEditDraft.plan.reminderEnabled}
+                      onChange={(e) => updateFollowUpDraft("reminderEnabled", e.target.checked)}
+                      className="toggle-checkbox"
+                    />
+                    <span className="toggle-track">
+                      <span className="toggle-thumb" />
+                    </span>
+                    <span className="toggle-text">
+                      {followUpEditDraft.plan.reminderEnabled ? "已开启" : "已关闭"}
+                    </span>
+                  </div>
+                </label>
+                <label className="full-width">
+                  <span>联系备注</span>
+                  <textarea
+                    placeholder="记录联系过程中的重要信息"
+                    value={followUpEditDraft.plan.contactNote}
+                    onChange={(e) => updateFollowUpDraft("contactNote", e.target.value)}
+                    rows={3}
+                  />
+                </label>
+              </div>
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={closeFollowUpEdit}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="primary-action"
+                  style={{ backgroundColor: roleColors["前台"], borderColor: roleColors["前台"] }}
+                  onClick={saveFollowUpPlan}
+                >
+                  保存修改
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

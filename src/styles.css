@@ -1605,3 +1605,280 @@ input {
   }
 }
 
+.role-switcher {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.role-switcher-label {
+  font-size: 14px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.role-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.role-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 16px;
+  border: 2px solid var(--border);
+  background: #ffffff;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 15px;
+  font-weight: 600;
+  color: #475569;
+  min-width: 120px;
+}
+
+.role-tab:hover {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 5%, #ffffff);
+}
+
+.role-tab.active {
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.role-tab-desc {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.role-tab:not(.active) .role-tab-desc {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+.role-chips button {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.role-chip-active {
+  font-weight: 600;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.doctor-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.doctor-summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 12px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+}
+
+.doctor-summary-item strong {
+  font-size: 28px;
+  color: var(--primary);
+  line-height: 1.2;
+}
+
+.doctor-summary-item span {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.doctor-hint,
+.assistant-hint,
+.reception-hint {
+  margin: 0;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.6;
+  border-left: 3px solid var(--border);
+}
+
+.doctor-hint {
+  border-left-color: var(--primary);
+}
+
+.assistant-hint {
+  border-left-color: var(--accent);
+}
+
+.reception-hint {
+  border-left-color: var(--warn);
+}
+
+.section-eyebrow-doctor,
+.section-eyebrow-assistant,
+.section-eyebrow-reception {
+  font-weight: 700;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.section-eyebrow-doctor {
+  color: var(--primary);
+}
+
+.section-eyebrow-assistant {
+  color: var(--accent);
+}
+
+.section-eyebrow-reception {
+  color: var(--warn);
+}
+
+.reception-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.reception-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 12px;
+  background: #ffffff;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.reception-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.reception-stat strong {
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.reception-stat span {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.followup-patient {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.followup-card-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.followup-card--reception {
+  padding-bottom: 14px;
+}
+
+.contact-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid;
+  width: fit-content;
+}
+
+.followup-note {
+  font-size: 13px;
+  color: #526070;
+  line-height: 1.6;
+  background: #f8fafc;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+}
+
+.followup-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  grid-column: 1 / -1;
+}
+
+.contact-status-select {
+  flex: 1;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 2px solid var(--border);
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 36px;
+  transition: all 0.2s ease;
+}
+
+.contact-status-select:hover {
+  border-color: var(--primary);
+}
+
+.followup-edit-btn {
+  font-size: 13px;
+  min-height: 36px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.modal-content--followup {
+  width: min(560px, calc(100% - 48px));
+}
+
+.modal-body {
+  padding: 24px 28px;
+}
+
+@media (max-width: 860px) {
+  .role-tabs {
+    flex-direction: column;
+  }
+
+  .role-tab {
+    width: 100%;
+  }
+
+  .doctor-summary,
+  .reception-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
