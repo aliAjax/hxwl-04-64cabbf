@@ -41,6 +41,19 @@ import {
   ExportFormat,
   CaseSummaryRow,
 } from "./exportUtils";
+import {
+  ConsistencyIssue,
+  RepairPreview,
+  RepairPlan,
+  ConsistencyIssueType,
+  ConsistencySeverity,
+  checkConsistency,
+  generateRepairPreview,
+  applyRepairs,
+  getIssueTypeLabel,
+  getSeverityColor,
+  getSeverityLabel,
+} from "./consistency";
 
 const project = {
   "id": "hxwl-04",
@@ -342,6 +355,15 @@ function App() {
   const [batchTargetStatus, setBatchTargetStatus] = useState<ContactStatus>("已联系");
   const [batchNoteTemplate, setBatchNoteTemplate] = useState<string>("");
   const [batchConfirmOpen, setBatchConfirmOpen] = useState<boolean>(false);
+  const [consistencyIssues, setConsistencyIssues] = useState<ConsistencyIssue[]>([]);
+  const [showConsistencyPanel, setShowConsistencyPanel] = useState<boolean>(false);
+  const [showRepairPreview, setShowRepairPreview] = useState<boolean>(false);
+  const [repairPreview, setRepairPreview] = useState<RepairPreview | null>(null);
+  const [isCheckingConsistency, setIsCheckingConsistency] = useState<boolean>(false);
+  const [isApplyingRepairs, setIsApplyingRepairs] = useState<boolean>(false);
+  const [lastConsistencyCheck, setLastConsistencyCheck] = useState<string>("");
+  const [consistencyFilter, setConsistencyFilter] = useState<"all" | "error" | "warning" | "info">("all");
+  const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -364,6 +386,10 @@ function App() {
         setLastSyncAt(migrated.lastSyncAt || new Date().toISOString().replace("T", " ").slice(0, 19));
         isInitialized.current = true;
         isPersistEnabled.current = true;
+
+        setTimeout(() => {
+          performConsistencyCheck(true);
+        }, 500);
       } catch (err) {
         console.error("初始化 IndexedDB 失败：", err);
       } finally {
@@ -586,6 +612,135 @@ function App() {
   };
 
   const unresolvedConflicts = conflicts.filter(c => !c.resolved);
+
+  const getCurrentAppData = (): AppData => ({
+    records,
+    caseInfos,
+    operationLogs,
+    followUpPlans,
+    workingLengths,
+    timelines,
+    activeStage,
+    changeQueue,
+    conflicts,
+    syncStatus,
+    lastSyncAt,
+  });
+
+  const performConsistencyCheck = async (silent: boolean = false) => {
+    setIsCheckingConsistency(true);
+    try {
+      const data = getCurrentAppData();
+      const issues = checkConsistency(data);
+      setConsistencyIssues(issues);
+      setLastConsistencyCheck(new Date().toISOString().replace("T", " ").slice(0, 19));
+
+      if (!silent && issues.length > 0) {
+        const errorCount = issues.filter(i => i.severity === "error").length;
+        const warningCount = issues.filter(i => i.severity === "warning").length;
+        if (errorCount > 0 || warningCount > 0) {
+          setShowConsistencyPanel(true);
+        }
+      }
+
+      return issues;
+    } catch (err) {
+      console.error("一致性校验失败：", err);
+      if (!silent) {
+        alert("一致性校验失败，请查看控制台。");
+      }
+      return [];
+    } finally {
+      setIsCheckingConsistency(false);
+    }
+  };
+
+  const generateRepairPlanPreview = () => {
+    const data = getCurrentAppData();
+    const preview = generateRepairPreview(consistencyIssues, data);
+    setRepairPreview(preview);
+    setShowRepairPreview(true);
+  };
+
+  const toggleRepairPlanSelection = (issueId: string) => {
+    if (!repairPreview) return;
+    setRepairPreview({
+      ...repairPreview,
+      plans: repairPreview.plans.map(p =>
+        p.issueId === issueId ? { ...p, selected: !p.selected } : p
+      ),
+    });
+  };
+
+  const selectAllRepairPlans = () => {
+    if (!repairPreview) return;
+    setRepairPreview({
+      ...repairPreview,
+      plans: repairPreview.plans.map(p =>
+        p.actions.length > 0 ? { ...p, selected: true } : p
+      ),
+    });
+  };
+
+  const deselectAllRepairPlans = () => {
+    if (!repairPreview) return;
+    setRepairPreview({
+      ...repairPreview,
+      plans: repairPreview.plans.map(p => ({ ...p, selected: false })),
+    });
+  };
+
+  const applySelectedRepairs = async () => {
+    if (!repairPreview) return;
+
+    if (!confirm("确认应用选中的修复方案吗？修复操作将直接修改数据，但会保留所有操作日志和待同步变更。")) {
+      return;
+    }
+
+    setIsApplyingRepairs(true);
+    try {
+      const data = getCurrentAppData();
+      const { data: newData, result } = applyRepairs(repairPreview, data);
+
+      if (!result.success) {
+        alert(`部分修复失败：\n${result.errors.join("\n")}`);
+      }
+
+      const operatorName =
+        currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
+
+      const repairLog: OperationLog = {
+        id: `log_repair_${Date.now()}`,
+        caseId: "system",
+        operator: operatorName,
+        role: currentRole,
+        action: "更新基础信息",
+        detail: `数据一致性修复：已应用 ${result.appliedCount} 项修复，跳过 ${result.skippedCount} 项，失败 ${result.failedCount} 项`,
+        timestamp: new Date().toISOString().replace("T", " ").slice(0, 19),
+      };
+
+      setRecords(newData.records);
+      setCaseInfos(newData.caseInfos);
+      setFollowUpPlans(newData.followUpPlans);
+      setWorkingLengths(newData.workingLengths);
+      setTimelines(newData.timelines);
+      setOperationLogs(prev => [repairLog, ...prev]);
+
+      setShowRepairPreview(false);
+      setRepairPreview(null);
+
+      setTimeout(() => {
+        performConsistencyCheck(true);
+      }, 300);
+
+      alert(`修复完成：\n• 成功应用：${result.appliedCount} 项\n• 跳过：${result.skippedCount} 项\n• 失败：${result.failedCount} 项`);
+    } catch (err) {
+      console.error("应用修复失败：", err);
+      alert("应用修复失败，请查看控制台。");
+    } finally {
+      setIsApplyingRepairs(false);
+    }
+  };
 
   const simulateRemoteChanges = () => {
     if (caseInfos.length === 0) return;
@@ -928,6 +1083,10 @@ function App() {
       setTimeout(() => {
         isPersistEnabled.current = true;
       }, 100);
+
+      setTimeout(() => {
+        performConsistencyCheck(false);
+      }, 300);
     } catch (err) {
       console.error("重置数据失败：", err);
       alert("重置数据失败，请查看控制台。");
@@ -1403,6 +1562,10 @@ function App() {
     setIsEditingBasicInfo(false);
     setBasicInfoDraft(null);
     setBasicInfoError("");
+
+    setTimeout(() => {
+      performConsistencyCheck(true);
+    }, 200);
   };
 
   const startEditingNode = (timelineId: string, node: TimelineNode) => {
@@ -1917,6 +2080,25 @@ function App() {
                 <span className="conflict-badge">{unresolvedConflicts.length} 冲突</span>
               )}
             </button>
+            <button
+              type="button"
+              className={`consistency-btn ${consistencyIssues.some(i => i.severity === "error") ? "has-errors" : consistencyIssues.length > 0 ? "has-warnings" : ""}`}
+              onClick={() => setShowConsistencyPanel(prev => !prev)}
+              disabled={isCheckingConsistency}
+            >
+              {isCheckingConsistency ? (
+                <>校验中...</>
+              ) : (
+                <>
+                  数据一致性 ({consistencyIssues.length})
+                  {consistencyIssues.some(i => i.severity === "error") && (
+                    <span className="consistency-badge error">
+                      {consistencyIssues.filter(i => i.severity === "error").length} 错误
+                    </span>
+                  )}
+                </>
+              )}
+            </button>
           </div>
           <button
             type="button"
@@ -2089,6 +2271,311 @@ function App() {
             })()}
           </div>
         </section>
+      )}
+
+      {showConsistencyPanel && (
+        <section className="consistency-panel panel">
+          <div className="section-heading">
+            <div>
+              <p>数据一致性校验</p>
+              <h2>数据完整性检查</h2>
+              {lastConsistencyCheck && (
+                <p className="consistency-last-check">上次检查：{lastConsistencyCheck}</p>
+              )}
+            </div>
+            <div className="consistency-actions">
+              <div className="consistency-filter-tabs">
+                {(["all", "error", "warning", "info"] as const).map(filter => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={`consistency-filter-btn ${consistencyFilter === filter ? "active" : ""}`}
+                    onClick={() => setConsistencyFilter(filter)}
+                  >
+                    {filter === "all" ? "全部" : getSeverityLabel(filter)}
+                    <span className="consistency-filter-count">
+                      {filter === "all"
+                        ? consistencyIssues.length
+                        : consistencyIssues.filter(i => i.severity === filter).length}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="consistency-refresh-btn"
+                onClick={() => performConsistencyCheck(false)}
+                disabled={isCheckingConsistency}
+              >
+                {isCheckingConsistency ? "检查中..." : "重新检查"}
+              </button>
+              {consistencyIssues.some(i => i.autoFixable) && (
+                <button
+                  type="button"
+                  className="consistency-repair-btn"
+                  onClick={generateRepairPlanPreview}
+                >
+                  一键修复
+                </button>
+              )}
+              <button
+                type="button"
+                className="panel-close-btn"
+                onClick={() => setShowConsistencyPanel(false)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+
+          <div className="consistency-summary">
+            <div className="consistency-summary-item">
+              <span className="consistency-summary-label">总计问题</span>
+              <span className="consistency-summary-value total">{consistencyIssues.length}</span>
+            </div>
+            <div className="consistency-summary-item">
+              <span className="consistency-summary-label">严重错误</span>
+              <span className="consistency-summary-value error">
+                {consistencyIssues.filter(i => i.severity === "error").length}
+              </span>
+            </div>
+            <div className="consistency-summary-item">
+              <span className="consistency-summary-label">警告</span>
+              <span className="consistency-summary-value warning">
+                {consistencyIssues.filter(i => i.severity === "warning").length}
+              </span>
+            </div>
+            <div className="consistency-summary-item">
+              <span className="consistency-summary-label">提示</span>
+              <span className="consistency-summary-value info">
+                {consistencyIssues.filter(i => i.severity === "info").length}
+              </span>
+            </div>
+            <div className="consistency-summary-item">
+              <span className="consistency-summary-label">可自动修复</span>
+              <span className="consistency-summary-value fixable">
+                {consistencyIssues.filter(i => i.autoFixable).length}
+              </span>
+            </div>
+          </div>
+
+          <div className="consistency-issues-list">
+            {(consistencyFilter === "all"
+              ? consistencyIssues
+              : consistencyIssues.filter(i => i.severity === consistencyFilter)
+            ).length === 0 ? (
+              <div className="empty-state">
+                <p>没有发现数据一致性问题</p>
+                <p className="empty-state-hint">数据状态良好，所有关联关系正常</p>
+              </div>
+            ) : (
+              (consistencyFilter === "all"
+                ? consistencyIssues
+                : consistencyIssues.filter(i => i.severity === consistencyFilter)
+              ).map(issue => (
+                <div
+                  key={issue.id}
+                  className={`consistency-issue-card severity-${issue.severity}`}
+                >
+                  <div
+                    className="consistency-issue-header"
+                    onClick={() => setExpandedIssueId(expandedIssueId === issue.id ? null : issue.id)}
+                  >
+                    <div className="consistency-issue-left">
+                      <span
+                        className="consistency-severity-badge"
+                        style={{ backgroundColor: getSeverityColor(issue.severity) }}
+                      >
+                        {getSeverityLabel(issue.severity)}
+                      </span>
+                      <span className="consistency-type-badge">
+                        {getIssueTypeLabel(issue.type)}
+                      </span>
+                      <h4 className="consistency-issue-title">{issue.title}</h4>
+                    </div>
+                    <div className="consistency-issue-right">
+                      {issue.autoFixable && (
+                        <span className="consistency-fixable-badge">可自动修复</span>
+                      )}
+                      <span className={`consistency-expand-icon ${expandedIssueId === issue.id ? "expanded" : ""}`}>
+                        ▼
+                      </span>
+                    </div>
+                  </div>
+                  {expandedIssueId === issue.id && (
+                    <div className="consistency-issue-body">
+                      <p className="consistency-issue-description">{issue.description}</p>
+                      <div className="consistency-issue-entities">
+                        <h5>受影响的记录：</h5>
+                        <ul>
+                          {issue.affectedEntities.map((entity, idx) => (
+                            <li key={idx}>
+                              <span className="consistency-entity-table">{entity.sourceTable}</span>
+                              {entity.caseId && (
+                                <span className="consistency-entity-field">caseId: {entity.caseId}</span>
+                              )}
+                              {entity.toothPosition && (
+                                <span className="consistency-entity-field">牙位: {entity.toothPosition}</span>
+                              )}
+                              {entity.recordId && (
+                                <span className="consistency-entity-field">记录ID: {entity.recordId}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      {!issue.autoFixable && (
+                        <div className="consistency-manual-note">
+                          ⚠️ 此问题需要手动处理，可能涉及数据合并或人工决策
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+
+      {showRepairPreview && repairPreview && (
+        <div className="modal-overlay">
+          <div className="modal-container repair-preview-modal">
+            <div className="modal-header">
+              <div>
+                <h2>数据修复预览</h2>
+                <p>请确认以下修复方案，勾选需要执行的修复项</p>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => {
+                  setShowRepairPreview(false);
+                  setRepairPreview(null);
+                }}
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="repair-preview-summary">
+              <div className="repair-summary-item">
+                <span className="repair-summary-label">问题总数</span>
+                <span className="repair-summary-value">{repairPreview.summary.totalIssues}</span>
+              </div>
+              <div className="repair-summary-item">
+                <span className="repair-summary-label">可修复</span>
+                <span className="repair-summary-value fixable">{repairPreview.summary.fixableIssues}</span>
+              </div>
+              <div className="repair-summary-item">
+                <span className="repair-summary-label">将删除</span>
+                <span className="repair-summary-value delete">{repairPreview.summary.willDelete}</span>
+              </div>
+              <div className="repair-summary-item">
+                <span className="repair-summary-label">将更新</span>
+                <span className="repair-summary-value update">{repairPreview.summary.willUpdate}</span>
+              </div>
+              <div className="repair-summary-item">
+                <span className="repair-summary-label">将创建</span>
+                <span className="repair-summary-value create">{repairPreview.summary.willCreate}</span>
+              </div>
+            </div>
+
+            <div className="repair-preview-actions">
+              <button type="button" className="btn-secondary" onClick={selectAllRepairPlans}>
+                全选可修复项
+              </button>
+              <button type="button" className="btn-secondary" onClick={deselectAllRepairPlans}>
+                取消全选
+              </button>
+              <span className="repair-selected-count">
+                已选择 {repairPreview.plans.filter(p => p.selected).length} / {repairPreview.plans.length} 项
+              </span>
+            </div>
+
+            <div className="repair-plans-list">
+              {repairPreview.plans.map(plan => (
+                <div
+                  key={plan.issueId}
+                  className={`repair-plan-card ${plan.selected ? "selected" : ""} ${plan.actions.length === 0 ? "disabled" : ""}`}
+                >
+                  <div className="repair-plan-header">
+                    <label className="repair-plan-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={plan.selected}
+                        disabled={plan.actions.length === 0}
+                        onChange={() => toggleRepairPlanSelection(plan.issueId)}
+                      />
+                    </label>
+                    <div className="repair-plan-title">
+                      <h4>{plan.issue.title}</h4>
+                      <p>{plan.description}</p>
+                    </div>
+                    <span className="repair-plan-count">{plan.actions.length} 操作</span>
+                  </div>
+                  {plan.actions.length > 0 && (
+                    <div className="repair-plan-actions">
+                      {plan.actions.map((action, idx) => (
+                        <div key={idx} className={`repair-action repair-action--${action.type}`}>
+                          <div className="repair-action-header">
+                            <span className="repair-action-type">
+                              {action.type === "delete" ? "删除" : action.type === "update" ? "更新" : "创建"}
+                            </span>
+                            <span className="repair-action-table">{action.targetTable}</span>
+                          </div>
+                          {action.fieldChanges && (
+                            <div className="repair-action-preview">
+                              {action.fieldChanges.map((change, cidx) => (
+                                <div key={cidx} className="repair-change-row">
+                                  <span className="repair-change-field">{change.field}:</span>
+                                  <span className="repair-change-old">{change.oldValue ?? "(空)"}</span>
+                                  <span className="repair-change-arrow">→</span>
+                                  <span className="repair-change-new">{change.newValue ?? "(空)"}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {plan.actions.length === 0 && (
+                    <div className="repair-plan-no-actions">
+                      无可执行的修复操作
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-footer">
+              <div className="repair-warning">
+                <p>⚠️ 注意：修复操作将直接修改数据，但不会影响操作日志和待同步变更记录。</p>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setShowRepairPreview(false);
+                    setRepairPreview(null);
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={applySelectedRepairs}
+                  disabled={isApplyingRepairs || repairPreview.plans.filter(p => p.selected).length === 0}
+                >
+                  {isApplyingRepairs ? "修复中..." : `应用选中的修复 (${repairPreview.plans.filter(p => p.selected).length})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       <section className="stage-tabs-wrapper">
