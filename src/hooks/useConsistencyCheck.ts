@@ -1,9 +1,5 @@
 import React, { useState } from "react";
 import {
-  ConsistencyIssue,
-  ConsistencySeverity,
-  RepairPlan,
-  RepairPreview,
   CaseBasicInfo,
   FollowUpPlan,
   WorkingLengthRecord,
@@ -13,6 +9,11 @@ import {
   UserRole,
 } from "../db";
 import {
+  ConsistencyIssue,
+  ConsistencySeverity,
+  ConsistencyIssueType,
+  RepairPlan,
+  RepairPreview,
   checkConsistency,
   generateRepairPreview as engineGenerateRepairPreview,
   applyRepairs as engineApplyRepairs,
@@ -61,7 +62,7 @@ interface UseConsistencyCheckReturn {
   expandedIssueId: string | null;
   setExpandedIssueId: React.Dispatch<React.SetStateAction<string | null>>;
   filteredIssues: ConsistencyIssue[];
-  getIssueTypeLabel: (issueType: string) => string;
+  getIssueTypeLabel: (issueType: ConsistencyIssueType) => string;
   getSeverityLabel: (severity: ConsistencySeverity) => string;
   getSeverityColor: (severity: ConsistencySeverity) => string;
   performConsistencyCheck: (silent?: boolean, inputData?: AppData) => Promise<ConsistencyIssue[]>;
@@ -146,7 +147,7 @@ export function useConsistencyCheck(params: UseConsistencyCheckParams): UseConsi
     if (!repairPreview) return;
     setRepairPreview({
       ...repairPreview,
-      plans: repairPreview.plans.map(p =>
+      plans: repairPreview.plans.map((p: RepairPlan) =>
         p.issueId === issueId ? { ...p, selected: !p.selected } : p
       ),
     });
@@ -156,7 +157,7 @@ export function useConsistencyCheck(params: UseConsistencyCheckParams): UseConsi
     if (!repairPreview) return;
     setRepairPreview({
       ...repairPreview,
-      plans: repairPreview.plans.map(p =>
+      plans: repairPreview.plans.map((p: RepairPlan) =>
         p.actions.length > 0 ? { ...p, selected: true } : p
       ),
     });
@@ -166,7 +167,7 @@ export function useConsistencyCheck(params: UseConsistencyCheckParams): UseConsi
     if (!repairPreview) return;
     setRepairPreview({
       ...repairPreview,
-      plans: repairPreview.plans.map(p => ({ ...p, selected: false })),
+      plans: repairPreview.plans.map((p: RepairPlan) => ({ ...p, selected: false })),
     });
   };
 

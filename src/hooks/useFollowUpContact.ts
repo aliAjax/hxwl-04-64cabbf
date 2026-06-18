@@ -77,7 +77,7 @@ export function useFollowUpContact(params: UseFollowUpContactParams): UseFollowU
 
   const [showBatchPanel, setShowBatchPanel] = useState<boolean>(false);
   const [batchFilterType, setBatchFilterType] = useState<"overdue" | "within3days" | "pending">("overdue");
-  [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
   const [batchTargetStatus, setBatchTargetStatus] = useState<string>("已联系");
   const [batchNoteTemplate, setBatchNoteTemplate] = useState<string>("电话通知复诊安排");
   const [batchConfirmOpen, setBatchConfirmOpen] = useState<boolean>(false);
@@ -196,8 +196,6 @@ export function useFollowUpContact(params: UseFollowUpContactParams): UseFollowU
       const updatedPlan = { ...plan };
       if (plan.contactStatus !== batchTargetStatus) {
         updatedPlan.contactStatus = batchTargetStatus as ContactStatus;
-        updatedPlan.lastContactAt = now;
-        updatedPlan.contactedBy = operatorName;
       }
       if (batchNoteTemplate.trim()) {
         updatedPlan.contactNote = plan.contactNote
