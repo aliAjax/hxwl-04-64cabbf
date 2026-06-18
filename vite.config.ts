@@ -11,4 +11,9 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5104,
   },
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    globals: true,
+  },
 });

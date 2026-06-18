@@ -100,7 +100,7 @@ export function compressLocalChanges(changes: ReplayableChange[]): {
   compressed: ReplayableChange[];
   groups: CompressedChangeGroup[];
 } {
-  const groups: Map<string, ReplayableChange[]> = new Map();
+  const groups: Map<string, ReplayableChange[][]> = new Map();
 
   const localPending = changes
     .filter(c => c.source === "local" && c.syncStatus === "pending")
@@ -111,52 +111,55 @@ export function compressLocalChanges(changes: ReplayableChange[]): {
 
   localPending.forEach(change => {
     const key = getChangeGroupKey(change);
-    const existing = groups.get(key) || [];
+    const bucket = groups.get(key) || [];
 
-    if (existing.length > 0) {
-      const last = existing[existing.length - 1];
+    if (bucket.length > 0) {
+      const lastGroup = bucket[bucket.length - 1];
+      const last = lastGroup[lastGroup.length - 1];
       if (canCompressChanges(last, change)) {
-        existing.push(change);
-        groups.set(key, existing);
+        lastGroup.push(change);
         return;
       }
     }
 
-    groups.set(key, [change]);
+    bucket.push([change]);
+    groups.set(key, bucket);
   });
 
   const nonCompressible = changes.filter(c => !(c.source === "local" && c.syncStatus === "pending"));
 
-  groups.forEach((groupChanges, key) => {
-    if (groupChanges.length <= 1) {
-      compressed.push(...groupChanges);
-      return;
-    }
+  groups.forEach((bucket, key) => {
+    bucket.forEach(groupChanges => {
+      if (groupChanges.length <= 1) {
+        compressed.push(...groupChanges);
+        return;
+      }
 
-    const first = groupChanges[0];
-    const last = groupChanges[groupChanges.length - 1];
-    const compressedPayloads = groupChanges.map(c => serializeCompressedPayload(c));
+      const first = groupChanges[0];
+      const last = groupChanges[groupChanges.length - 1];
+      const compressedPayloads = groupChanges.map(c => serializeCompressedPayload(c));
 
-    const mergedChange: ReplayableChange = {
-      ...last,
-      id: `rc_compressed_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-      oldValue: first.oldValue,
-      newValue: last.newValue,
-      changedAt: last.changedAt,
-      compressedFrom: compressedPayloads.map(p => p.id),
-    };
+      const mergedChange: ReplayableChange = {
+        ...last,
+        id: `rc_compressed_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        oldValue: first.oldValue,
+        newValue: last.newValue,
+        changedAt: last.changedAt,
+        compressedFrom: compressedPayloads.map(p => p.id),
+      };
 
-    compressed.push(mergedChange);
-    groupResults.push({
-      groupKey: key,
-      caseId: first.caseId,
-      entityType: first.entityType,
-      entityId: first.entityId,
-      field: first.field,
-      changes: [...groupChanges],
-      firstChangedAt: first.changedAt,
-      lastChangedAt: last.changedAt,
-      compressedChange: mergedChange,
+      compressed.push(mergedChange);
+      groupResults.push({
+        groupKey: key,
+        caseId: first.caseId,
+        entityType: first.entityType,
+        entityId: first.entityId,
+        field: first.field,
+        changes: [...groupChanges],
+        firstChangedAt: first.changedAt,
+        lastChangedAt: last.changedAt,
+        compressedChange: mergedChange,
+      });
     });
   });
 
