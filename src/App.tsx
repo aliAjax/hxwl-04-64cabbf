@@ -37,7 +37,6 @@ import {
   compressLocalChanges,
   getFieldLabelForEntity,
   generateOperationLogDetail,
-  replayLocalChanges,
   CompressedChangeGroup,
 } from "./syncEngine";
 import {
@@ -806,11 +805,7 @@ function App() {
     }
   };
 
-  const simulateRemoteChanges = () => {
-    if (caseInfos.length === 0) return;
-    setSimulatingSync(true);
-    setSyncStatus("syncing");
-
+  const buildSimulatedRemoteSnapshot = (baseData: AppData) => {
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
     const allRoles: UserRole[] = ["医生", "助理", "前台"];
     const randomRole = allRoles[Math.floor(Math.random() * allRoles.length)];
@@ -841,104 +836,111 @@ function App() {
     };
 
     const numCases = Math.min(3 + Math.floor(Math.random() * 3), caseInfos.length);
-    const shuffled = [...caseInfos].sort(() => Math.random() - 0.5);
+    const shuffled = [...baseData.caseInfos].sort(() => Math.random() - 0.5);
     const targetCases = shuffled.slice(0, numCases);
 
+    const simulatedCaseInfos = baseData.caseInfos.map(c => ({ ...c }));
+    const simulatedFollowUpPlans = baseData.followUpPlans.map(p => ({ ...p }));
+    const simulatedWorkingLengths = baseData.workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
+    const simulatedTimelines = baseData.timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
+    const simulatedRecords = baseData.records.map(r => [...r]);
+
+    targetCases.forEach((caseInfo, idx) => {
+      const caseId = caseInfo.id;
+      const rolesToSimulate = idx === 0 ? allRoles : [randomRole];
+
+      rolesToSimulate.forEach((simRole) => {
+        const fields = getFieldsForRole(simRole);
+        const fieldDef = fields[Math.floor(Math.random() * fields.length)];
+        const remoteValue = fieldDef.getValue(caseInfo);
+        const targetInfo = simulatedCaseInfos.find(c => c.id === caseId);
+        if (targetInfo) {
+          const currentValue = String(targetInfo[fieldDef.field as keyof CaseBasicInfo] || "");
+          if (remoteValue !== currentValue) {
+            (targetInfo as any)[fieldDef.field] = remoteValue;
+            targetInfo.updatedAt = now.split(" ")[0];
+          }
+        }
+      });
+
+      const followUp = simulatedFollowUpPlans.find(f => f.caseId === caseId);
+      if (followUp && Math.random() > 0.5) {
+        const contactStatuses: ContactStatus[] = ["已联系", "已确认", "未接通"];
+        const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
+        if (followUp.contactStatus !== newContactStatus) {
+          followUp.contactStatus = newContactStatus;
+        }
+      }
+
+      const wl = simulatedWorkingLengths.find(w => w.caseId === caseId);
+      if (wl && Math.random() > 0.6) {
+        const randomEntry = wl.entries[Math.floor(Math.random() * wl.entries.length)];
+        if (randomEntry) {
+          const newLength = (parseFloat(randomEntry.measuredLength) + (Math.random() > 0.5 ? 0.5 : -0.3)).toFixed(1);
+          if (parseFloat(newLength) > 0) {
+            randomEntry.measuredLength = newLength;
+          }
+        }
+        if (Math.random() > 0.7) {
+          wl.note = wl.note ? wl.note + "；远端更新" : "远端补充备注";
+        }
+      }
+
+      const tl = simulatedTimelines.find(t => t.caseId === caseId);
+      if (tl && Math.random() > 0.6) {
+        const incompleteNodes = tl.nodes.filter(n => !n.isCompleted);
+        if (incompleteNodes.length > 0) {
+          const targetNode = incompleteNodes[Math.floor(Math.random() * incompleteNodes.length)];
+          targetNode.isCompleted = true;
+          targetNode.completedAt = now;
+          targetNode.operator = "李医生";
+          targetNode.keyParams = "远端确认完成";
+        } else {
+          const completedNodes = tl.nodes.filter(n => n.isCompleted);
+          if (completedNodes.length > 0) {
+            const targetNode = completedNodes[Math.floor(Math.random() * completedNodes.length)];
+            if (Math.random() > 0.5) {
+              targetNode.keyParams = targetNode.keyParams ? targetNode.keyParams + "（远端修订）" : "远端更新参数";
+            }
+          }
+        }
+      }
+    });
+
+    simulatedCaseInfos.forEach(ci => {
+      const idx = simulatedRecords.findIndex(r => r[0] === ci.id);
+      if (idx >= 0) {
+        const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
+        const detailParts: string[] = [];
+        if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
+        if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
+        if (ci.medication) detailParts.push(`封药：${ci.medication}`);
+        if (ci.remark) detailParts.push(ci.remark);
+        simulatedRecords[idx] = [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
+      }
+    });
+
+    return {
+      remoteSnapshot: {
+        caseInfos: simulatedCaseInfos,
+        followUpPlans: simulatedFollowUpPlans,
+        workingLengths: simulatedWorkingLengths,
+        timelines: simulatedTimelines,
+        records: simulatedRecords,
+      },
+      remoteChangedBy: allRoles[Math.floor(Math.random() * allRoles.length)],
+    };
+  };
+
+  const simulateRemoteChanges = () => {
+    if (caseInfos.length === 0) return;
+    setSimulatingSync(true);
+    setSyncStatus("syncing");
+
     setTimeout(() => {
-      const simulatedCaseInfos = caseInfos.map(c => ({ ...c }));
-      const simulatedFollowUpPlans = followUpPlans.map(p => ({ ...p }));
-      const simulatedWorkingLengths = workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
-      const simulatedTimelines = timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
-      const simulatedRecords = records.map(r => [...r]);
-
-      targetCases.forEach((caseInfo, idx) => {
-        const caseId = caseInfo.id;
-        const rolesToSimulate = idx === 0 ? allRoles : [randomRole];
-
-        rolesToSimulate.forEach((simRole) => {
-          const fields = getFieldsForRole(simRole);
-          const fieldDef = fields[Math.floor(Math.random() * fields.length)];
-          const remoteValue = fieldDef.getValue(caseInfo);
-          const targetInfo = simulatedCaseInfos.find(c => c.id === caseId);
-          if (targetInfo) {
-            const currentValue = String(targetInfo[fieldDef.field as keyof CaseBasicInfo] || "");
-            if (remoteValue !== currentValue) {
-              (targetInfo as any)[fieldDef.field] = remoteValue;
-              targetInfo.updatedAt = now.split(" ")[0];
-            }
-          }
-        });
-
-        const followUp = simulatedFollowUpPlans.find(f => f.caseId === caseId);
-        if (followUp && Math.random() > 0.5) {
-          const contactStatuses: ContactStatus[] = ["已联系", "已确认", "未接通"];
-          const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
-          if (followUp.contactStatus !== newContactStatus) {
-            followUp.contactStatus = newContactStatus;
-          }
-        }
-
-        const wl = simulatedWorkingLengths.find(w => w.caseId === caseId);
-        if (wl && Math.random() > 0.6) {
-          const randomEntry = wl.entries[Math.floor(Math.random() * wl.entries.length)];
-          if (randomEntry) {
-            const newLength = (parseFloat(randomEntry.measuredLength) + (Math.random() > 0.5 ? 0.5 : -0.3)).toFixed(1);
-            if (parseFloat(newLength) > 0) {
-              randomEntry.measuredLength = newLength;
-            }
-          }
-          if (Math.random() > 0.7) {
-            wl.note = wl.note ? wl.note + "；远端更新" : "远端补充备注";
-          }
-        }
-
-        const tl = simulatedTimelines.find(t => t.caseId === caseId);
-        if (tl && Math.random() > 0.6) {
-          const incompleteNodes = tl.nodes.filter(n => !n.isCompleted);
-          if (incompleteNodes.length > 0) {
-            const targetNode = incompleteNodes[Math.floor(Math.random() * incompleteNodes.length)];
-            targetNode.isCompleted = true;
-            targetNode.completedAt = now;
-            targetNode.operator = "李医生";
-            targetNode.keyParams = "远端确认完成";
-          } else {
-            const completedNodes = tl.nodes.filter(n => n.isCompleted);
-            if (completedNodes.length > 0) {
-              const targetNode = completedNodes[Math.floor(Math.random() * completedNodes.length)];
-              if (Math.random() > 0.5) {
-                targetNode.keyParams = targetNode.keyParams ? targetNode.keyParams + "（远端修订）" : "远端更新参数";
-              }
-            }
-          }
-        }
-      });
-
-      simulatedCaseInfos.forEach(ci => {
-        const idx = simulatedRecords.findIndex(r => r[0] === ci.id);
-        if (idx >= 0) {
-          const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
-          const detailParts: string[] = [];
-          if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
-          if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
-          if (ci.medication) detailParts.push(`封药：${ci.medication}`);
-          if (ci.remark) detailParts.push(ci.remark);
-          simulatedRecords[idx] = [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
-        }
-      });
-
       const currentData = getCurrentAppData();
-      const simRole = allRoles[Math.floor(Math.random() * allRoles.length)];
-      const { data: newData, result } = applyRemoteSnapshot(
-        currentData,
-        {
-          caseInfos: simulatedCaseInfos,
-          followUpPlans: simulatedFollowUpPlans,
-          workingLengths: simulatedWorkingLengths,
-          timelines: simulatedTimelines,
-          records: simulatedRecords,
-        },
-        simRole
-      );
+      const { remoteSnapshot, remoteChangedBy } = buildSimulatedRemoteSnapshot(currentData);
+      const { data: newData, result } = applyRemoteSnapshot(currentData, remoteSnapshot, remoteChangedBy);
 
       applyDataState(newData);
       setOperationLogs(prev => {
@@ -1051,16 +1053,39 @@ function App() {
       addOperationLog("system", "更新基础信息", `进入离线模式，本地变更将暂存至恢复在线后同步`);
     } else if (syncStatus === "offline") {
       const currentData = getCurrentAppData();
-      const { data: replayedData, replayed } = replayLocalChanges(currentData);
-      applyDataState({
-        ...replayedData,
-        syncStatus: "online",
-        offlineStartedAt: null,
+      const remoteBaseData = currentData.lastRemoteSnapshot
+        ? {
+            ...currentData,
+            caseInfos: currentData.lastRemoteSnapshot.caseInfos,
+            followUpPlans: currentData.lastRemoteSnapshot.followUpPlans,
+            workingLengths: currentData.lastRemoteSnapshot.workingLengths,
+            timelines: currentData.lastRemoteSnapshot.timelines,
+            records: currentData.lastRemoteSnapshot.records,
+          }
+        : currentData;
+      const { remoteSnapshot, remoteChangedBy } = buildSimulatedRemoteSnapshot(remoteBaseData);
+      const { data: syncedData, result } = applyRemoteSnapshot(currentData, remoteSnapshot, remoteChangedBy);
+      applyDataState(syncedData);
+      setOperationLogs(prev => {
+        const logs: OperationLog[] = [];
+        result.appliedChanges.forEach(change => {
+          logs.push(createOperationLog(
+            change.caseId,
+            change.changedBy === "医生" ? "张医生" : change.changedBy === "助理" ? "李助理" : "王前台",
+            change.changedBy,
+            "更新基础信息",
+            `[恢复在线远端快照] ${generateOperationLogDetail(change)}`
+          ));
+        });
+        return [...logs.reverse(), ...prev];
       });
-      if (replayed.length > 0) {
-        addOperationLog("system", "更新基础信息", `恢复在线，已回放 ${replayed.length} 条本地变更`);
+      if (result.conflicts.length > 0) {
+        setShowConflictModal(true);
+        addOperationLog("system", "更新基础信息", `恢复在线，检测到 ${result.conflicts.length} 个远端快照冲突`);
+      } else if (result.appliedChanges.length > 0) {
+        addOperationLog("system", "更新基础信息", `恢复在线，已应用 ${result.appliedChanges.length} 条远端快照变更并同步本地队列`);
       } else {
-        addOperationLog("system", "更新基础信息", `恢复在线，无待回放本地变更`);
+        addOperationLog("system", "更新基础信息", `恢复在线，无远端快照变更或待处理冲突`);
       }
     }
   };
@@ -1355,15 +1380,32 @@ function App() {
         const newEntrySummary = validEntries.map(e => `${e.canalName}:${e.measuredLength}`).join(",");
         if (oldEntrySummary !== newEntrySummary) {
           recordFieldChange(caseId, "workingLengthDetails", oldEntrySummary, newEntrySummary);
-          queueReplayableChange({
-            caseId,
-            entityType: "workingLength",
-            entityId: canalDraft.editingId,
-            field: "entries",
-            oldValue: oldEntrySummary,
-            newValue: newEntrySummary,
-          });
         }
+        const existingEntryMap = new Map(existingWl.entries.map(entry => [entry.id, entry]));
+        const trackableEntryFields: (keyof CanalEntry)[] = [
+          "measuredLength",
+          "referenceApex",
+          "measurementMethod",
+          "confirmedStatus",
+        ];
+        validEntries.forEach(entry => {
+          const existingEntry = existingEntryMap.get(entry.id);
+          if (!existingEntry) return;
+          trackableEntryFields.forEach(field => {
+            const oldVal = String(existingEntry[field] || "");
+            const newVal = String(entry[field] || "");
+            if (oldVal !== newVal) {
+              queueReplayableChange({
+                caseId,
+                entityType: "workingLength",
+                entityId: `${canalDraft.editingId}::${entry.id}`,
+                field: `entries.${field}`,
+                oldValue: oldVal,
+                newValue: newVal,
+              });
+            }
+          });
+        });
         if (existingWl.note !== canalDraft.note) {
           queueReplayableChange({
             caseId,
