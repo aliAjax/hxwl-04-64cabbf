@@ -612,10 +612,10 @@ function App() {
     return fieldLabelMap[field] || field;
   };
 
-  const enumFields = new Set(["currentStep", "contactStatus", "confirmedStatus", "referenceApex", "measurementMethod"]);
+  const enumFields = new Set(["currentStep", "contactStatus", "confirmedStatus", "referenceApex", "measurementMethod", "isCompleted"]);
 
   const isTextField = (field: string): boolean => {
-    return !enumFields.has(field) && !field.startsWith("timeline_") && field !== "workingLengthDetails";
+    return !enumFields.has(field) && !field.startsWith("timeline_") && field !== "workingLengthDetails" && !field.startsWith("entries.") && !field.startsWith("record[");
   };
 
   const [mergedValues, setMergedValues] = useState<Record<string, string>>({});
@@ -875,6 +875,40 @@ function App() {
           const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
           if (followUp.contactStatus !== newContactStatus) {
             followUp.contactStatus = newContactStatus;
+          }
+        }
+
+        const wl = simulatedWorkingLengths.find(w => w.caseId === caseId);
+        if (wl && Math.random() > 0.6) {
+          const randomEntry = wl.entries[Math.floor(Math.random() * wl.entries.length)];
+          if (randomEntry) {
+            const newLength = (parseFloat(randomEntry.measuredLength) + (Math.random() > 0.5 ? 0.5 : -0.3)).toFixed(1);
+            if (parseFloat(newLength) > 0) {
+              randomEntry.measuredLength = newLength;
+            }
+          }
+          if (Math.random() > 0.7) {
+            wl.note = wl.note ? wl.note + "；远端更新" : "远端补充备注";
+          }
+        }
+
+        const tl = simulatedTimelines.find(t => t.caseId === caseId);
+        if (tl && Math.random() > 0.6) {
+          const incompleteNodes = tl.nodes.filter(n => !n.isCompleted);
+          if (incompleteNodes.length > 0) {
+            const targetNode = incompleteNodes[Math.floor(Math.random() * incompleteNodes.length)];
+            targetNode.isCompleted = true;
+            targetNode.completedAt = now;
+            targetNode.operator = "李医生";
+            targetNode.keyParams = "远端确认完成";
+          } else {
+            const completedNodes = tl.nodes.filter(n => n.isCompleted);
+            if (completedNodes.length > 0) {
+              const targetNode = completedNodes[Math.floor(Math.random() * completedNodes.length)];
+              if (Math.random() > 0.5) {
+                targetNode.keyParams = targetNode.keyParams ? targetNode.keyParams + "（远端修订）" : "远端更新参数";
+              }
+            }
           }
         }
       });

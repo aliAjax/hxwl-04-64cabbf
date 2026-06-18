@@ -7,6 +7,7 @@ import {
   FollowUpPlan,
   WorkingLengthRecord,
   TreatmentTimeline,
+  TimelineNode,
   UserRole,
   ChangeEntityType,
   createReplayableChange,
@@ -35,7 +36,35 @@ export interface CompressedChangeGroup {
   compressedChange: ReplayableChange;
 }
 
+export interface CompressedChangePayload {
+  id: string;
+  oldValue: string;
+  newValue: string;
+  changedBy: UserRole;
+  changedAt: string;
+  source: "local" | "remote";
+  syncStatus: "pending" | "synced" | "conflict";
+}
+
 const COMPRESS_WINDOW_MS = 5 * 60 * 1000;
+
+const TRACKABLE_CASE_INFO_FIELDS: (keyof CaseBasicInfo)[] = [
+  "toothPosition", "patientName", "phone", "diagnosis",
+  "currentStep", "workingLength", "mainFileNumber", "medication", "remark",
+];
+
+const TRACKABLE_FOLLOW_UP_FIELDS: (keyof FollowUpPlan)[] = [
+  "nextDate", "doctor", "contactStatus", "patientName",
+  "phone", "reason", "contactNote",
+];
+
+const TRACKABLE_WORKING_LENGTH_FIELDS = ["note"];
+
+const TRACKABLE_TIMELINE_NODE_FIELDS: (keyof TimelineNode)[] = [
+  "completedAt", "operator", "keyParams", "exceptionNotes", "isCompleted",
+];
+
+const TRACKABLE_RECORD_INDICES = [2, 3, 5];
 
 export function getChangeGroupKey(change: ReplayableChange): string {
   return `${change.caseId}:${change.entityType}:${change.entityId}:${change.field}`;
@@ -53,6 +82,18 @@ export function canCompressChanges(prev: ReplayableChange, next: ReplayableChang
   const prevTime = new Date(prev.changedAt).getTime();
   const nextTime = new Date(next.changedAt).getTime();
   return Math.abs(nextTime - prevTime) <= COMPRESS_WINDOW_MS;
+}
+
+function serializeCompressedPayload(change: ReplayableChange): CompressedChangePayload {
+  return {
+    id: change.id,
+    oldValue: change.oldValue,
+    newValue: change.newValue,
+    changedBy: change.changedBy,
+    changedAt: change.changedAt,
+    source: change.source,
+    syncStatus: change.syncStatus,
+  };
 }
 
 export function compressLocalChanges(changes: ReplayableChange[]): {
@@ -94,7 +135,7 @@ export function compressLocalChanges(changes: ReplayableChange[]): {
 
     const first = groupChanges[0];
     const last = groupChanges[groupChanges.length - 1];
-    const compressedIds = groupChanges.map(c => c.id);
+    const compressedPayloads = groupChanges.map(c => serializeCompressedPayload(c));
 
     const mergedChange: ReplayableChange = {
       ...last,
@@ -102,7 +143,7 @@ export function compressLocalChanges(changes: ReplayableChange[]): {
       oldValue: first.oldValue,
       newValue: last.newValue,
       changedAt: last.changedAt,
-      compressedFrom: compressedIds,
+      compressedFrom: compressedPayloads.map(p => p.id),
     };
 
     compressed.push(mergedChange);
@@ -161,12 +202,11 @@ export function queueLocalChange(
   });
 
   const updatedChanges = [...data.replayableChanges, change];
-  const { compressed } = compressLocalChanges(updatedChanges);
 
   return {
     data: {
       ...data,
-      replayableChanges: compressed,
+      replayableChanges: updatedChanges,
     },
     change,
   };
@@ -184,7 +224,6 @@ export function diffSnapshots(
   changedBy: UserRole
 ): ReplayableChange[] {
   const changes: ReplayableChange[] = [];
-  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 
   if (!base) return changes;
 
@@ -192,10 +231,10 @@ export function diffSnapshots(
   current.caseInfos.forEach(c => {
     const baseCase = caseInfoMap.get(c.id);
     if (!baseCase) return;
-    (Object.keys(c) as (keyof CaseBasicInfo)[]).forEach(field => {
+    TRACKABLE_CASE_INFO_FIELDS.forEach(field => {
       const baseVal = String(baseCase[field] || "");
       const currVal = String(c[field] || "");
-      if (baseVal !== currVal && ["toothPosition", "patientName", "phone", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"].includes(field)) {
+      if (baseVal !== currVal) {
         changes.push(createReplayableChange({
           caseId: c.id,
           entityType: "caseBasicInfo",
@@ -215,10 +254,10 @@ export function diffSnapshots(
   current.followUpPlans.forEach(p => {
     const basePlan = followUpMap.get(p.id);
     if (!basePlan) return;
-    (Object.keys(p) as (keyof FollowUpPlan)[]).forEach(field => {
+    TRACKABLE_FOLLOW_UP_FIELDS.forEach(field => {
       const baseVal = String(basePlan[field] || "");
       const currVal = String(p[field] || "");
-      if (baseVal !== currVal && ["nextDate", "doctor", "contactStatus", "patientName", "phone", "reason", "contactNote"].includes(field)) {
+      if (baseVal !== currVal) {
         changes.push(createReplayableChange({
           caseId: p.caseId,
           entityType: "followUpPlan",
@@ -234,7 +273,115 @@ export function diffSnapshots(
     });
   });
 
+  const wlMap = new Map(base.workingLengths.map(w => [w.id, w]));
+  current.workingLengths.forEach(w => {
+    const baseWl = wlMap.get(w.id);
+    if (!baseWl) return;
+    TRACKABLE_WORKING_LENGTH_FIELDS.forEach(field => {
+      const baseVal = String((baseWl as any)[field] || "");
+      const currVal = String((w as any)[field] || "");
+      if (baseVal !== currVal) {
+        const caseId = w.caseId || findCaseIdFromRecords(base.records, w.toothPosition);
+        changes.push(createReplayableChange({
+          caseId,
+          entityType: "workingLength",
+          entityId: w.id,
+          field,
+          oldValue: baseVal,
+          newValue: currVal,
+          changedBy,
+          source: "remote",
+          syncStatus: "synced",
+        }));
+      }
+    });
+    const baseEntryMap = new Map(baseWl.entries.map(e => [e.id, e]));
+    w.entries.forEach(entry => {
+      const baseEntry = baseEntryMap.get(entry.id);
+      if (!baseEntry) return;
+      const entryFields: (keyof typeof entry)[] = [
+        "measuredLength", "referenceApex", "measurementMethod", "confirmedStatus",
+      ];
+      entryFields.forEach(field => {
+        const baseVal = String(baseEntry[field] || "");
+        const currVal = String(entry[field] || "");
+        if (baseVal !== currVal) {
+          const caseId = w.caseId || findCaseIdFromRecords(base.records, w.toothPosition);
+          changes.push(createReplayableChange({
+            caseId,
+            entityType: "workingLength",
+            entityId: `${w.id}::${entry.id}`,
+            field: `entries.${field}`,
+            oldValue: baseVal,
+            newValue: currVal,
+            changedBy,
+            source: "remote",
+            syncStatus: "synced",
+          }));
+        }
+      });
+    });
+  });
+
+  const tlMap = new Map(base.timelines.map(t => [t.id, t]));
+  current.timelines.forEach(t => {
+    const baseTl = tlMap.get(t.id);
+    if (!baseTl) return;
+    const baseNodeMap = new Map(baseTl.nodes.map(n => [n.id, n]));
+    t.nodes.forEach(node => {
+      const baseNode = baseNodeMap.get(node.id);
+      if (!baseNode) return;
+      TRACKABLE_TIMELINE_NODE_FIELDS.forEach(field => {
+        const baseVal = String(baseNode[field] || "");
+        const currVal = String(node[field] || "");
+        if (baseVal !== currVal) {
+          const caseId = t.caseId || findCaseIdFromRecords(base.records, t.toothPosition);
+          changes.push(createReplayableChange({
+            caseId,
+            entityType: "timelineNode",
+            entityId: node.id,
+            field,
+            oldValue: baseVal,
+            newValue: currVal,
+            changedBy,
+            source: "remote",
+            syncStatus: "synced",
+          }));
+        }
+      });
+    });
+  });
+
+  const baseRecordMap = new Map(base.records.map(r => [r[0], r]));
+  current.records.forEach(record => {
+    const caseId = record[0];
+    const baseRecord = baseRecordMap.get(caseId);
+    if (!baseRecord) return;
+    TRACKABLE_RECORD_INDICES.forEach(idx => {
+      const baseVal = baseRecord[idx] || "";
+      const currVal = record[idx] || "";
+      if (baseVal !== currVal) {
+        changes.push(createReplayableChange({
+          caseId,
+          entityType: "caseRecord",
+          entityId: caseId,
+          field: `record[${idx}]`,
+          oldValue: baseVal,
+          newValue: currVal,
+          changedBy,
+          source: "remote",
+          syncStatus: "synced",
+        }));
+      }
+    });
+  });
+
   return changes;
+}
+
+function findCaseIdFromRecords(records: string[][], toothPosition: string): string {
+  const rec = records.find(r => r[1] === toothPosition);
+  return rec ? rec[0] : "";
 }
 
 export function detectConflicts(
@@ -304,12 +451,63 @@ function getBaseValueFromSnapshot(snapshot: RemoteSnapshot, change: ReplayableCh
       break;
     }
     case "workingLength": {
-      const w = snapshot.workingLengths.find(wl => wl.id === change.entityId);
-      if (w && change.field in w) return String((w as any)[change.field] || "");
+      if (change.field.startsWith("entries.")) {
+        const wl = snapshot.workingLengths.find(w => change.entityId.startsWith(w.id));
+        if (wl) {
+          const entryId = change.entityId.split("::")[1];
+          const entry = wl.entries.find(e => e.id === entryId);
+          if (entry) {
+            const subField = change.field.replace("entries.", "");
+            return String((entry as any)[subField] || "");
+          }
+        }
+      } else {
+        const w = snapshot.workingLengths.find(wl => wl.id === change.entityId);
+        if (w && change.field in w) return String((w as any)[change.field] || "");
+      }
+      break;
+    }
+    case "timelineNode": {
+      for (const tl of snapshot.timelines) {
+        const node = tl.nodes.find(n => n.id === change.entityId);
+        if (node && change.field in node) return String((node as any)[change.field] || "");
+      }
+      break;
+    }
+    case "caseRecord": {
+      const rec = snapshot.records.find(r => r[0] === change.entityId);
+      if (rec) {
+        const idxMatch = change.field.match(/record\[(\d+)\]/);
+        if (idxMatch) {
+          const idx = parseInt(idxMatch[1], 10);
+          return rec[idx] || "";
+        }
+      }
       break;
     }
   }
   return "";
+}
+
+function rebuildRecordFromCaseInfo(ci: CaseBasicInfo): string[] {
+  const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
+  const detailParts: string[] = [];
+  if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
+  if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
+  if (ci.medication) detailParts.push(`封药：${ci.medication}`);
+  if (ci.remark) detailParts.push(ci.remark);
+  return [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
+}
+
+function applyChangeToEntity<T extends Record<string, any>>(
+  items: T[],
+  entityId: string,
+  field: string,
+  value: string
+): T[] {
+  return items.map(item =>
+    item.id === entityId ? { ...item, [field]: value } as T : item
+  );
 }
 
 export function applyRemoteSnapshot(
@@ -334,34 +532,50 @@ export function applyRemoteSnapshot(
   const conflictKeys = new Set(conflicts.map(c => getConflictKey(c)));
 
   const nonConflictingRemote = remoteChanges.filter(rc => {
-    const key = `${rc.caseId}:${rc.entityType}:${rc.entityId}:${rc.field}`;
+    const key = getChangeGroupKey(rc);
     return !conflictKeys.has(key);
   });
 
   let newCaseInfos = [...data.caseInfos];
   let newFollowUpPlans = [...data.followUpPlans];
-  let newWorkingLengths = [...data.workingLengths];
-  let newTimelines = [...data.timelines];
-  let newRecords = [...data.records];
+  let newWorkingLengths = data.workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
+  let newTimelines = data.timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
+  let newRecords = data.records.map(r => [...r]);
 
   nonConflictingRemote.forEach(change => {
     switch (change.entityType) {
       case "caseBasicInfo":
-        newCaseInfos = newCaseInfos.map(c =>
-          c.id === change.entityId
-            ? { ...c, [change.field]: change.newValue, updatedAt: change.changedAt.split(" ")[0] } as CaseBasicInfo
-            : c
-        );
+        newCaseInfos = applyChangeToEntity(newCaseInfos, change.entityId, change.field, change.newValue);
+        if (change.field === "currentStep" || change.field === "workingLength" || change.field === "mainFileNumber" || change.field === "medication" || change.field === "remark" || change.field === "diagnosis" || change.field === "toothPosition") {
+          const ci = newCaseInfos.find(c => c.id === change.entityId);
+          if (ci) {
+            const recIdx = newRecords.findIndex(r => r[0] === ci.id);
+            if (recIdx >= 0) {
+              newRecords[recIdx] = rebuildRecordFromCaseInfo(ci);
+            }
+          }
+        }
         break;
       case "followUpPlan":
-        newFollowUpPlans = newFollowUpPlans.map(p =>
-          p.id === change.entityId ? { ...p, [change.field]: change.newValue } as FollowUpPlan : p
-        );
+        newFollowUpPlans = applyChangeToEntity(newFollowUpPlans, change.entityId, change.field, change.newValue);
         break;
       case "workingLength":
-        newWorkingLengths = newWorkingLengths.map(w =>
-          w.id === change.entityId ? { ...w, [change.field]: change.newValue } as WorkingLengthRecord : w
-        );
+        if (change.field.startsWith("entries.")) {
+          const wlId = change.entityId.split("::")[0];
+          const entryId = change.entityId.split("::")[1];
+          const subField = change.field.replace("entries.", "");
+          newWorkingLengths = newWorkingLengths.map(w => {
+            if (w.id !== wlId) return w;
+            return {
+              ...w,
+              entries: w.entries.map(e =>
+                e.id === entryId ? { ...e, [subField]: change.newValue } : e
+              ),
+            };
+          });
+        } else {
+          newWorkingLengths = applyChangeToEntity(newWorkingLengths, change.entityId, change.field, change.newValue);
+        }
         break;
       case "timelineNode":
         newTimelines = newTimelines.map(tl => ({
@@ -371,31 +585,34 @@ export function applyRemoteSnapshot(
           ),
         }));
         break;
+      case "caseRecord": {
+        const recIdx = newRecords.findIndex(r => r[0] === change.entityId);
+        if (recIdx >= 0) {
+          const idxMatch = change.field.match(/record\[(\d+)\]/);
+          if (idxMatch) {
+            const idx = parseInt(idxMatch[1], 10);
+            newRecords[recIdx][idx] = change.newValue;
+          }
+        }
+        break;
+      }
     }
   });
 
   newCaseInfos.forEach(ci => {
     const idx = newRecords.findIndex(r => r[0] === ci.id);
     if (idx >= 0) {
-      const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
-      const detailParts: string[] = [];
-      if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
-      if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
-      if (ci.medication) detailParts.push(`封药：${ci.medication}`);
-      if (ci.remark) detailParts.push(ci.remark);
-      newRecords[idx] = [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
+      newRecords[idx] = rebuildRecordFromCaseInfo(ci);
     }
   });
 
-  const conflictChangeIds = new Set(conflicts.flatMap(c => [c.localChangeId, c.remoteChangeId]));
-
   const updatedLocalChanges = data.replayableChanges.map(c => {
     if (c.source === "local" && c.syncStatus === "pending") {
-      const key = `${c.caseId}:${c.entityType}:${c.entityId}:${c.field}`;
+      const key = getChangeGroupKey(c);
       if (conflictKeys.has(key)) {
         return { ...c, syncStatus: "conflict" as const };
       }
-      return c;
+      return { ...c, syncStatus: "synced" as const };
     }
     return c;
   });
@@ -449,9 +666,9 @@ export function resolveConflict(
 
   let newCaseInfos = [...data.caseInfos];
   let newFollowUpPlans = [...data.followUpPlans];
-  let newWorkingLengths = [...data.workingLengths];
-  let newTimelines = [...data.timelines];
-  let newRecords = [...data.records];
+  let newWorkingLengths = data.workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
+  let newTimelines = data.timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
+  let newRecords = data.records.map(r => [...r]);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -462,16 +679,66 @@ export function resolveConflict(
           ? { ...c, [conflict.field]: resolution.resolvedValue, updatedAt: today } as CaseBasicInfo
           : c
       );
+      {
+        const ci = newCaseInfos.find(c => c.id === conflict.entityId);
+        if (ci) {
+          const recIdx = newRecords.findIndex(r => r[0] === ci.id);
+          if (recIdx >= 0) {
+            newRecords[recIdx] = rebuildRecordFromCaseInfo(ci);
+          }
+        }
+      }
       break;
     case "followUpPlan":
       newFollowUpPlans = newFollowUpPlans.map(p =>
         p.id === conflict.entityId ? { ...p, [conflict.field]: resolution.resolvedValue } as FollowUpPlan : p
       );
+      {
+        const plan = newFollowUpPlans.find(p => p.id === conflict.entityId);
+        if (plan) {
+          const ci = newCaseInfos.find(c => c.id === plan.caseId);
+          if (ci) {
+            const recIdx = newRecords.findIndex(r => r[0] === ci.id);
+            if (recIdx >= 0) {
+              newRecords[recIdx] = rebuildRecordFromCaseInfo(ci);
+            }
+          }
+        }
+      }
       break;
     case "workingLength":
-      newWorkingLengths = newWorkingLengths.map(w =>
-        w.id === conflict.entityId ? { ...w, [conflict.field]: resolution.resolvedValue } as WorkingLengthRecord : w
-      );
+      if (conflict.field.startsWith("entries.")) {
+        const wlId = conflict.entityId.split("::")[0];
+        const entryId = conflict.entityId.split("::")[1];
+        const subField = conflict.field.replace("entries.", "");
+        newWorkingLengths = newWorkingLengths.map(w => {
+          if (w.id !== wlId) return w;
+          return {
+            ...w,
+            entries: w.entries.map(e =>
+              e.id === entryId ? { ...e, [subField]: resolution.resolvedValue } : e
+            ),
+          };
+        });
+      } else {
+        newWorkingLengths = newWorkingLengths.map(w =>
+          w.id === conflict.entityId ? { ...w, [conflict.field]: resolution.resolvedValue } as WorkingLengthRecord : w
+        );
+      }
+      {
+        const wl = newWorkingLengths.find(w =>
+          w.id === conflict.entityId || conflict.entityId.startsWith(w.id)
+        );
+        if (wl) {
+          const ci = newCaseInfos.find(c => c.id === wl.caseId);
+          if (ci) {
+            const recIdx = newRecords.findIndex(r => r[0] === ci.id);
+            if (recIdx >= 0) {
+              newRecords[recIdx] = rebuildRecordFromCaseInfo(ci);
+            }
+          }
+        }
+      }
       break;
     case "timelineNode":
       newTimelines = newTimelines.map(tl => ({
@@ -480,26 +747,42 @@ export function resolveConflict(
           n.id === conflict.entityId ? { ...n, [conflict.field]: resolution.resolvedValue } : n
         ),
       }));
+      {
+        const tl = newTimelines.find(t =>
+          t.nodes.some(n => n.id === conflict.entityId)
+        );
+        if (tl) {
+          const ci = newCaseInfos.find(c => c.id === tl.caseId);
+          if (ci) {
+            const recIdx = newRecords.findIndex(r => r[0] === ci.id);
+            if (recIdx >= 0) {
+              newRecords[recIdx] = rebuildRecordFromCaseInfo(ci);
+            }
+          }
+        }
+      }
       break;
+    case "caseRecord": {
+      const recIdx = newRecords.findIndex(r => r[0] === conflict.entityId);
+      if (recIdx >= 0) {
+        const idxMatch = conflict.field.match(/record\[(\d+)\]/);
+        if (idxMatch) {
+          const idx = parseInt(idxMatch[1], 10);
+          newRecords[recIdx][idx] = resolution.resolvedValue;
+        }
+      }
+      break;
+    }
   }
 
-  if (conflict.entityType === "caseBasicInfo") {
-    newCaseInfos.forEach(ci => {
-      const idx = newRecords.findIndex(r => r[0] === ci.id);
-      if (idx >= 0) {
-        const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
-        const detailParts: string[] = [];
-        if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
-        if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
-        if (ci.medication) detailParts.push(`封药：${ci.medication}`);
-        if (ci.remark) detailParts.push(ci.remark);
-        newRecords[idx] = [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
-      }
-    });
-  }
+  const localChangeId = conflict.localChangeId;
+  const remoteChangeId = conflict.remoteChangeId;
 
   const newChanges = data.replayableChanges.map(c => {
-    if (c.id === conflict.localChangeId || c.id === conflict.remoteChangeId) {
+    if (c.id === localChangeId || c.id === remoteChangeId) {
+      return { ...c, syncStatus: "synced" as const, newValue: resolution.resolvedValue };
+    }
+    if (c.compressedFrom && (c.compressedFrom.includes(localChangeId) || c.compressedFrom.includes(remoteChangeId))) {
       return { ...c, syncStatus: "synced" as const, newValue: resolution.resolvedValue };
     }
     return c;
@@ -532,27 +815,34 @@ export function replayLocalChanges(
 
   let newCaseInfos = [...data.caseInfos];
   let newFollowUpPlans = [...data.followUpPlans];
-  let newWorkingLengths = [...data.workingLengths];
-  let newTimelines = [...data.timelines];
+  let newWorkingLengths = data.workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
+  let newTimelines = data.timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
 
   pending.forEach(change => {
     switch (change.entityType) {
       case "caseBasicInfo":
-        newCaseInfos = newCaseInfos.map(c =>
-          c.id === change.entityId
-            ? { ...c, [change.field]: change.newValue } as CaseBasicInfo
-            : c
-        );
+        newCaseInfos = applyChangeToEntity(newCaseInfos, change.entityId, change.field, change.newValue);
         break;
       case "followUpPlan":
-        newFollowUpPlans = newFollowUpPlans.map(p =>
-          p.id === change.entityId ? { ...p, [change.field]: change.newValue } as FollowUpPlan : p
-        );
+        newFollowUpPlans = applyChangeToEntity(newFollowUpPlans, change.entityId, change.field, change.newValue);
         break;
       case "workingLength":
-        newWorkingLengths = newWorkingLengths.map(w =>
-          w.id === change.entityId ? { ...w, [change.field]: change.newValue } as WorkingLengthRecord : w
-        );
+        if (change.field.startsWith("entries.")) {
+          const wlId = change.entityId.split("::")[0];
+          const entryId = change.entityId.split("::")[1];
+          const subField = change.field.replace("entries.", "");
+          newWorkingLengths = newWorkingLengths.map(w => {
+            if (w.id !== wlId) return w;
+            return {
+              ...w,
+              entries: w.entries.map(e =>
+                e.id === entryId ? { ...e, [subField]: change.newValue } : e
+              ),
+            };
+          });
+        } else {
+          newWorkingLengths = applyChangeToEntity(newWorkingLengths, change.entityId, change.field, change.newValue);
+        }
         break;
       case "timelineNode":
         newTimelines = newTimelines.map(tl => ({
@@ -565,6 +855,21 @@ export function replayLocalChanges(
     }
   });
 
+  const newRecords = data.records.map(r => [...r]);
+  newCaseInfos.forEach(ci => {
+    const idx = newRecords.findIndex(r => r[0] === ci.id);
+    if (idx >= 0) {
+      newRecords[idx] = rebuildRecordFromCaseInfo(ci);
+    }
+  });
+
+  const syncedChanges = data.replayableChanges.map(c => {
+    if (c.source === "local" && c.syncStatus === "pending") {
+      return { ...c, syncStatus: "synced" as const };
+    }
+    return c;
+  });
+
   return {
     data: {
       ...data,
@@ -572,6 +877,8 @@ export function replayLocalChanges(
       followUpPlans: newFollowUpPlans,
       workingLengths: newWorkingLengths,
       timelines: newTimelines,
+      records: newRecords,
+      replayableChanges: syncedChanges,
     },
     replayed: pending,
   };
@@ -601,6 +908,10 @@ export function getFieldLabelForEntity(entityType: ChangeEntityType, field: stri
     },
     workingLength: {
       note: "工作长度备注",
+      "entries.measuredLength": "测量长度",
+      "entries.referenceApex": "参照点",
+      "entries.measurementMethod": "测量方法",
+      "entries.confirmedStatus": "确认状态",
     },
     timelineNode: {
       completedAt: "完成时间",
@@ -609,7 +920,11 @@ export function getFieldLabelForEntity(entityType: ChangeEntityType, field: stri
       exceptionNotes: "异常说明",
       isCompleted: "完成状态",
     },
-    caseRecord: {},
+    caseRecord: {
+      "record[2]": "诊断",
+      "record[3]": "当前步骤",
+      "record[5]": "治疗状态",
+    },
   };
 
   return labels[entityType]?.[field] || field;
