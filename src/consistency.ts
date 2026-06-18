@@ -975,12 +975,12 @@ function deriveStepFromTimeline(
   timeline: TreatmentTimeline
 ): TreatmentStep | null {
   const nodes = timeline.nodes;
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    if (nodes[i].isCompleted) {
+  for (let i = 0; i < nodes.length; i++) {
+    if (!nodes[i].isCompleted) {
       return nodes[i].step;
     }
   }
-  return null;
+  return nodes[nodes.length - 1]?.step || TREATMENT_STEPS[0] || null;
 }
 
 export function applyRepairs(
