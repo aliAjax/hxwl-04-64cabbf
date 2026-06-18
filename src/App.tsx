@@ -336,6 +336,12 @@ function App() {
   const [changeQueueFilter, setChangeQueueFilter] = useState<"all" | "pending" | "synced" | "conflict">("all");
   const [changeQueueRoleFilter, setChangeQueueRoleFilter] = useState<string>("all");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
+  const [showBatchPanel, setShowBatchPanel] = useState<boolean>(false);
+  const [batchFilterType, setBatchFilterType] = useState<"overdue" | "within3days" | "pending">("overdue");
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
+  const [batchTargetStatus, setBatchTargetStatus] = useState<ContactStatus>("已联系");
+  const [batchNoteTemplate, setBatchNoteTemplate] = useState<string>("");
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState<boolean>(false);
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -1630,6 +1636,102 @@ function App() {
     ));
   };
 
+  const getBatchCandidates = (): FollowUpPlan[] => {
+    return followUpPlans.filter(plan => {
+      const days = getDaysUntil(plan.nextDate);
+      switch (batchFilterType) {
+        case "overdue":
+          return days < 0;
+        case "within3days":
+          return days >= 0 && days <= 3;
+        case "pending":
+          return plan.contactStatus === "待联系";
+        default:
+          return false;
+      }
+    });
+  };
+
+  const toggleBatchSelect = (planId: string) => {
+    setBatchSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(planId)) {
+        next.delete(planId);
+      } else {
+        next.add(planId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllBatchCandidates = () => {
+    const candidates = getBatchCandidates();
+    setBatchSelectedIds(new Set(candidates.map(c => c.id)));
+  };
+
+  const clearBatchSelection = () => {
+    setBatchSelectedIds(new Set());
+  };
+
+  const getCancelledCount = (): number => {
+    return Array.from(batchSelectedIds).filter(id => {
+      const plan = followUpPlans.find(p => p.id === id);
+      return plan?.contactStatus === "已取消";
+    }).length;
+  };
+
+  const executeBatchUpdate = () => {
+    const selectedPlans = Array.from(batchSelectedIds)
+      .map(id => followUpPlans.find(p => p.id === id))
+      .filter((p): p is FollowUpPlan => p !== null);
+
+    const blockedPlans = selectedPlans.filter(p => p.contactStatus === "已取消" && batchTargetStatus === "已确认");
+    if (blockedPlans.length > 0) {
+      alert(`${blockedPlans.length} 条已取消的计划不能批量改为已确认，已自动跳过`);
+    }
+
+    const validPlans = selectedPlans.filter(p => !(p.contactStatus === "已取消" && batchTargetStatus === "已确认"));
+    if (validPlans.length === 0) {
+      setBatchConfirmOpen(false);
+      return;
+    }
+
+    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+
+    setFollowUpPlans(prev => prev.map(plan => {
+      if (!batchSelectedIds.has(plan.id)) return plan;
+      if (plan.contactStatus === "已取消" && batchTargetStatus === "已确认") return plan;
+      return {
+        ...plan,
+        contactStatus: batchTargetStatus,
+        contactNote: batchNoteTemplate.trim()
+          ? (plan.contactNote ? `${plan.contactNote}\n【${now}】${batchNoteTemplate.trim()}` : `【${now}】${batchNoteTemplate.trim()}`)
+          : plan.contactNote,
+      };
+    }));
+
+    validPlans.forEach(plan => {
+      if (plan.contactStatus !== batchTargetStatus) {
+        recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, batchTargetStatus);
+      }
+      if (batchNoteTemplate.trim()) {
+        const newNote = plan.contactNote
+          ? `${plan.contactNote}\n【${now}】${batchNoteTemplate.trim()}`
+          : `【${now}】${batchNoteTemplate.trim()}`;
+        recordFieldChange(plan.caseId, "contactNote", plan.contactNote, newNote);
+      }
+      addOperationLog(
+        plan.caseId,
+        "批量更新联系状态",
+        `${plan.toothPosition} ${plan.patientName || ""}：${plan.contactStatus} → ${batchTargetStatus}${batchNoteTemplate.trim() ? "，备注：" + batchNoteTemplate.trim() : ""}`
+      );
+    });
+
+    setBatchConfirmOpen(false);
+    setBatchSelectedIds(new Set());
+    setBatchNoteTemplate("");
+  };
+
   const filteredFollowUpPlans = contactStatusFilter
     ? followUpPlans.filter(p => p.contactStatus === contactStatusFilter)
     : followUpPlans;
@@ -2201,7 +2303,7 @@ function App() {
               </div>
             </div>
             <p className="reception-hint">
-              💡 您可以在下方「复诊计划」区域管理所有复诊安排，更新联系状态和患者信息。
+              💡 您可以在下方「复诊计划」区域管理所有复诊安排，更新联系状态和患者信息。点击「批量联系」可按逾期、3天内、待联系快速筛选并批量更新。
             </p>
           </section>
         )}
@@ -2669,6 +2771,19 @@ function App() {
             </h2>
           </div>
           <div className="followup-actions">
+            {currentRole === "前台" && (
+              <button
+                className={`primary-action batch-toggle-btn ${showBatchPanel ? "batch-toggle-btn--active" : ""}`}
+                onClick={() => {
+                  setShowBatchPanel(prev => !prev);
+                  if (!showBatchPanel) {
+                    setBatchSelectedIds(new Set());
+                  }
+                }}
+              >
+                {showBatchPanel ? "关闭批量" : "批量联系"}
+              </button>
+            )}
             <button
               className="secondary-action sort-btn"
               onClick={() => setSortAsc(prev => !prev)}
@@ -2691,6 +2806,156 @@ function App() {
             <span>后续</span>
           </div>
         </div>
+        {currentRole === "前台" && showBatchPanel && (
+          <div className="batch-panel">
+            <div className="batch-panel-header">
+              <h3>批量联系工作流</h3>
+              <span className="batch-panel-hint">按条件筛选候选复诊计划，勾选后批量更新联系状态与备注</span>
+            </div>
+            <div className="batch-filter-bar">
+              <span className="batch-filter-label">筛选条件：</span>
+              <div className="batch-filter-chips">
+                {([
+                  { key: "overdue" as const, label: "逾期", icon: "🔴" },
+                  { key: "within3days" as const, label: "3天内", icon: "🟠" },
+                  { key: "pending" as const, label: "待联系", icon: "🔵" },
+                ]).map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`batch-filter-chip ${batchFilterType === item.key ? "batch-filter-chip--active" : ""}`}
+                    onClick={() => {
+                      setBatchFilterType(item.key);
+                      setBatchSelectedIds(new Set());
+                    }}
+                  >
+                    {item.icon} {item.label}
+                    <span className="batch-filter-count">
+                      {followUpPlans.filter(p => {
+                        const days = getDaysUntil(p.nextDate);
+                        if (item.key === "overdue") return days < 0;
+                        if (item.key === "within3days") return days >= 0 && days <= 3;
+                        return p.contactStatus === "待联系";
+                      }).length}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="batch-toolbar">
+              <div className="batch-toolbar-left">
+                <button type="button" className="secondary-action batch-toolbar-btn" onClick={selectAllBatchCandidates}>
+                  全选
+                </button>
+                <button type="button" className="secondary-action batch-toolbar-btn" onClick={clearBatchSelection}>
+                  清空
+                </button>
+                <span className="batch-selected-count">
+                  已选 {batchSelectedIds.size} 条
+                </span>
+              </div>
+              <div className="batch-toolbar-right">
+                <label className="batch-status-label">
+                  目标状态：
+                  <select
+                    className="contact-status-select"
+                    value={batchTargetStatus}
+                    onChange={(e) => setBatchTargetStatus(e.target.value as ContactStatus)}
+                    style={{ borderColor: contactStatusColors[batchTargetStatus] }}
+                  >
+                    {contactStatusOptions.map(status => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
+                </label>
+                <input
+                  type="text"
+                  className="batch-note-input"
+                  placeholder="备注模板（可选，如：已电话通知复诊）"
+                  value={batchNoteTemplate}
+                  onChange={(e) => setBatchNoteTemplate(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="primary-action batch-execute-btn"
+                  disabled={batchSelectedIds.size === 0}
+                  onClick={() => setBatchConfirmOpen(true)}
+                >
+                  批量更新 ({batchSelectedIds.size})
+                </button>
+              </div>
+            </div>
+            {getCancelledCount() > 0 && batchTargetStatus === "已确认" && (
+              <div className="batch-warning">
+                ⚠️ 已取消的计划不能批量改为已确认，将自动跳过（共 {getCancelledCount()} 条）
+              </div>
+            )}
+            <div className="batch-candidate-list">
+              {(() => {
+                const candidates = getBatchCandidates();
+                if (candidates.length === 0) {
+                  return (
+                    <div className="empty-state">
+                      <p>当前筛选条件下无候选复诊计划</p>
+                    </div>
+                  );
+                }
+                return candidates.map(plan => {
+                  const days = getDaysUntil(plan.nextDate);
+                  const isSelected = batchSelectedIds.has(plan.id);
+                  const isCancelled = plan.contactStatus === "已取消";
+                  return (
+                    <label
+                      key={plan.id}
+                      className={`batch-candidate-item ${isSelected ? "batch-candidate-item--selected" : ""} ${isCancelled ? "batch-candidate-item--cancelled" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleBatchSelect(plan.id)}
+                      />
+                      <div className="batch-candidate-body">
+                        <div className="batch-candidate-main">
+                          <strong>{plan.toothPosition}</strong>
+                          <span className="batch-candidate-patient">{plan.patientName || "未命名"}</span>
+                          <span
+                            className="contact-status-badge"
+                            style={{
+                              backgroundColor: contactStatusColors[plan.contactStatus] + "15",
+                              color: contactStatusColors[plan.contactStatus],
+                              borderColor: contactStatusColors[plan.contactStatus],
+                              fontSize: "11px",
+                              padding: "2px 8px",
+                            }}
+                          >
+                            {plan.contactStatus}
+                          </span>
+                          <span className={`urgency-badge ${
+                            days < 0
+                              ? "urgency-badge--overdue"
+                              : days <= 3
+                              ? "urgency-badge--urgent"
+                              : "urgency-badge--upcoming"
+                          }`} style={{ fontSize: "11px", padding: "2px 8px" }}>
+                            {days < 0 ? `逾期${Math.abs(days)}天` : days === 0 ? "今日" : `${days}天后`}
+                          </span>
+                        </div>
+                        <div className="batch-candidate-sub">
+                          <span>复诊：{plan.nextDate}</span>
+                          <span>医生：{plan.doctor}</span>
+                          <span>{plan.reason}</span>
+                        </div>
+                        {isCancelled && batchTargetStatus === "已确认" && (
+                          <span className="batch-cancelled-hint">已取消，不可改为已确认</span>
+                        )}
+                      </div>
+                    </label>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        )}
         <div className="followup-kanban">
           {(currentRole === "前台" ? sortedAndFilteredPlans : sortedPlans).length > 0 ? (
             (currentRole === "前台" ? sortedAndFilteredPlans : sortedPlans).map((plan) => {
@@ -4123,6 +4388,94 @@ function App() {
                   disabled={exportSelectedFields.length === 0 || getRecordsForExport().length === 0}
                 >
                   {exportFormat === "csv" ? "📥 下载 CSV" : "🖨️ 生成打印页面"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchConfirmOpen && (
+        <div className="modal-overlay" onClick={() => setBatchConfirmOpen(false)}>
+          <div className="modal-content modal-content--batch-confirm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow" style={{ color: roleColors["前台"] }}>批量更新确认</p>
+                <h2 className="modal-title">确认批量更新联系状态</h2>
+              </div>
+              <button className="modal-close" onClick={() => setBatchConfirmOpen(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="batch-confirm-summary">
+                <div className="batch-confirm-item">
+                  <span>选中数量</span>
+                  <strong>{batchSelectedIds.size} 条</strong>
+                </div>
+                <div className="batch-confirm-item">
+                  <span>目标状态</span>
+                  <strong style={{ color: contactStatusColors[batchTargetStatus] }}>{batchTargetStatus}</strong>
+                </div>
+                {batchNoteTemplate.trim() && (
+                  <div className="batch-confirm-item">
+                    <span>备注模板</span>
+                    <strong>{batchNoteTemplate.trim()}</strong>
+                  </div>
+                )}
+                {getCancelledCount() > 0 && batchTargetStatus === "已确认" && (
+                  <div className="batch-confirm-item batch-confirm-item--warning">
+                    <span>自动跳过</span>
+                    <strong>{getCancelledCount()} 条已取消计划</strong>
+                  </div>
+                )}
+              </div>
+              <div className="batch-confirm-detail">
+                {Array.from(batchSelectedIds).map(id => {
+                  const plan = followUpPlans.find(p => p.id === id);
+                  if (!plan) return null;
+                  const isBlocked = plan.contactStatus === "已取消" && batchTargetStatus === "已确认";
+                  return (
+                    <div key={id} className={`batch-confirm-row ${isBlocked ? "batch-confirm-row--blocked" : ""}`}>
+                      <span>{plan.toothPosition} {plan.patientName || ""}</span>
+                      <span
+                        className="contact-status-badge"
+                        style={{
+                          backgroundColor: contactStatusColors[plan.contactStatus] + "15",
+                          color: contactStatusColors[plan.contactStatus],
+                          borderColor: contactStatusColors[plan.contactStatus],
+                          fontSize: "11px",
+                          padding: "2px 8px",
+                        }}
+                      >
+                        {plan.contactStatus}
+                      </span>
+                      <span className="batch-confirm-arrow">→</span>
+                      <span
+                        className="contact-status-badge"
+                        style={{
+                          backgroundColor: isBlocked ? "#f1f5f9" : contactStatusColors[batchTargetStatus] + "15",
+                          color: isBlocked ? "#94a3b8" : contactStatusColors[batchTargetStatus],
+                          borderColor: isBlocked ? "#e2e8f0" : contactStatusColors[batchTargetStatus],
+                          fontSize: "11px",
+                          padding: "2px 8px",
+                        }}
+                      >
+                        {isBlocked ? "跳过" : batchTargetStatus}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="form-actions">
+                <button type="button" className="secondary-action" onClick={() => setBatchConfirmOpen(false)}>
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="primary-action"
+                  style={{ backgroundColor: roleColors["前台"], borderColor: roleColors["前台"] }}
+                  onClick={executeBatchUpdate}
+                >
+                  确认批量更新
                 </button>
               </div>
             </div>
