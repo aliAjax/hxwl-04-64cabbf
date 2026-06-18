@@ -31,6 +31,15 @@ import {
   downloadCSV,
   generatePrintableHTML,
   openPrintWindow,
+  buildSummaryRows,
+  generateCSVFromRows,
+  generatePrintableHTMLFromRows,
+  EXPORT_FIELD_GROUPS,
+  DEFAULT_SELECTED_FIELDS,
+  getFieldLabel,
+  ExportScope,
+  ExportFormat,
+  CaseSummaryRow,
 } from "./exportUtils";
 
 const project = {
@@ -313,6 +322,10 @@ function App() {
   });
   const [showFollowUpEditModal, setShowFollowUpEditModal] = useState<boolean>(false);
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [exportScope, setExportScope] = useState<ExportScope>("filtered");
+  const [exportCustomStages, setExportCustomStages] = useState<string[]>([]);
+  const [exportSelectedFields, setExportSelectedFields] = useState<string[]>(DEFAULT_SELECTED_FIELDS);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [changeQueue, setChangeQueue] = useState<FieldChange[]>([]);
   const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("online");
@@ -1417,6 +1430,110 @@ function App() {
       return `${stageLabel} · 搜索「${searchKeyword.trim()}」`;
     }
     return stageLabel;
+  };
+
+  const getExportScopeLabel = (): string => {
+    switch (exportScope) {
+      case "all":
+        return "全部病例";
+      case "filtered":
+        return getFilterLabel();
+      case "custom":
+        if (exportCustomStages.length === 0) return "自定义（未选择阶段）";
+        return `自定义：${exportCustomStages.join("、")}`;
+      default:
+        return getFilterLabel();
+    }
+  };
+
+  const getRecordsForExport = (): string[][] => {
+    switch (exportScope) {
+      case "all":
+        return records;
+      case "filtered":
+        return filteredRecords;
+      case "custom":
+        if (exportCustomStages.length === 0) return records;
+        return records.filter((r) => exportCustomStages.includes(r[3]));
+      default:
+        return filteredRecords;
+    }
+  };
+
+  const toggleFieldSelection = (fieldKey: string) => {
+    setExportSelectedFields((prev) =>
+      prev.includes(fieldKey)
+        ? prev.filter((f) => f !== fieldKey)
+        : [...prev, fieldKey]
+    );
+  };
+
+  const toggleStageSelection = (stage: string) => {
+    setExportCustomStages((prev) =>
+      prev.includes(stage)
+        ? prev.filter((s) => s !== stage)
+        : [...prev, stage]
+    );
+  };
+
+  const selectAllFieldsInGroup = (groupKey: string) => {
+    const groupFields = EXPORT_FIELD_GROUPS[groupKey as keyof typeof EXPORT_FIELD_GROUPS]?.fields || [];
+    const fieldKeys = groupFields.map((f) => f.key);
+    setExportSelectedFields((prev) => {
+      const allSelected = fieldKeys.every((k) => prev.includes(k));
+      if (allSelected) {
+        return prev.filter((f) => !fieldKeys.includes(f));
+      } else {
+        return [...new Set([...prev, ...fieldKeys])];
+      }
+    });
+  };
+
+  const handleExport = () => {
+    if (exportSelectedFields.length === 0) {
+      alert("请至少选择一个导出字段");
+      return;
+    }
+
+    const exportRecords = getRecordsForExport();
+    if (exportRecords.length === 0) {
+      alert("当前筛选条件下没有可导出的记录");
+      return;
+    }
+
+    const rows = buildSummaryRows({
+      records: exportRecords,
+      caseInfos,
+      followUpPlans,
+      workingLengths,
+      operationLogs,
+      timelines,
+      selectedFields: exportSelectedFields,
+    });
+
+    const scopeLabel = getExportScopeLabel();
+    const dateStr = new Date().toISOString().split("T")[0];
+    const scopePart =
+      exportScope === "all"
+        ? "全部"
+        : exportScope === "filtered"
+        ? activeStage || "全部"
+        : exportCustomStages.length > 0
+        ? exportCustomStages.join("-")
+        : "自定义";
+    const searchPart = exportScope === "filtered" && searchKeyword.trim() ? `_搜索${searchKeyword.trim()}` : "";
+
+    if (exportFormat === "csv") {
+      const csvContent = generateCSVFromRows(rows, exportSelectedFields);
+      const filename = `根管治疗病例摘要_${scopePart}${searchPart}_${dateStr}.csv`;
+      downloadCSV(csvContent, filename);
+    } else {
+      const filterLabel = scopeLabel + (exportScope === "filtered" && searchKeyword.trim() ? "" : "");
+      const htmlContent = generatePrintableHTMLFromRows(rows, exportSelectedFields, filterLabel);
+      openPrintWindow(htmlContent);
+    }
+
+    setShowExportModal(false);
   };
 
   const handleExportCSV = () => {
@@ -3804,11 +3921,11 @@ function App() {
 
       {showExportModal && (
         <div className="modal-overlay" onClick={() => setShowExportModal(false)}>
-          <div className="modal-content modal-content--export" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content modal-content--export-config" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">病例摘要导出</p>
-                <h2 className="modal-title">选择导出格式</h2>
+                <h2 className="modal-title">配置导出选项</h2>
               </div>
               <button className="modal-close" onClick={() => setShowExportModal(false)}>×</button>
             </div>
@@ -3816,34 +3933,197 @@ function App() {
               <p className="export-hint">
                 当前筛选：<strong>{getFilterLabel()}</strong> · 共 <strong>{filteredRecords.length}</strong> 条记录
               </p>
-              <div className="export-options">
-                <button className="export-option" onClick={handleExportCSV}>
-                  <div className="export-option-icon">📊</div>
-                  <div className="export-option-content">
-                    <h3>CSV 格式</h3>
-                    <p>可直接用 Excel 打开，方便数据整理和统计分析</p>
-                  </div>
-                </button>
-                <button className="export-option" onClick={handleExportHTML}>
-                  <div className="export-option-icon">📄</div>
-                  <div className="export-option-content">
-                    <h3>可打印 HTML</h3>
-                    <p>生成美观的打印页面，可直接打印或保存为 PDF</p>
-                  </div>
-                </button>
-              </div>
-              <div className="export-fields-info">
-                <p className="export-fields-title">导出字段：</p>
-                <div className="export-field-tags">
-                  <span className="export-field-tag">患者姓名</span>
-                  <span className="export-field-tag">牙位</span>
-                  <span className="export-field-tag">诊断</span>
-                  <span className="export-field-tag">当前阶段</span>
-                  <span className="export-field-tag">工作长度</span>
-                  <span className="export-field-tag">封药状态</span>
-                  <span className="export-field-tag">复诊计划</span>
-                  <span className="export-field-tag">备注</span>
+
+              <div className="export-config-section">
+                <h3 className="export-config-title">1. 选择导出范围</h3>
+                <div className="export-scope-options">
+                  <label className={`export-scope-option ${exportScope === "all" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="exportScope"
+                      checked={exportScope === "all"}
+                      onChange={() => setExportScope("all")}
+                    />
+                    <div>
+                      <span className="export-scope-label">全部病例</span>
+                      <span className="export-scope-count">共 {records.length} 条</span>
+                    </div>
+                  </label>
+                  <label className={`export-scope-option ${exportScope === "filtered" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="exportScope"
+                      checked={exportScope === "filtered"}
+                      onChange={() => setExportScope("filtered")}
+                    />
+                    <div>
+                      <span className="export-scope-label">当前筛选结果</span>
+                      <span className="export-scope-count">共 {filteredRecords.length} 条</span>
+                    </div>
+                  </label>
+                  <label className={`export-scope-option ${exportScope === "custom" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="exportScope"
+                      checked={exportScope === "custom"}
+                      onChange={() => setExportScope("custom")}
+                    />
+                    <div>
+                      <span className="export-scope-label">自定义阶段</span>
+                      <span className="export-scope-count">
+                        {exportCustomStages.length > 0
+                          ? `已选 ${exportCustomStages.length} 个阶段，共 ${
+                              records.filter((r) => exportCustomStages.includes(r[3])).length
+                            } 条`
+                          : "请选择阶段"}
+                      </span>
+                    </div>
+                  </label>
                 </div>
+                {exportScope === "custom" && (
+                  <div className="export-custom-stages">
+                    {steps.map((stage) => (
+                      <label key={stage} className="export-stage-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={exportCustomStages.includes(stage)}
+                          onChange={() => toggleStageSelection(stage)}
+                        />
+                        <span
+                          className="export-stage-badge"
+                          style={{ backgroundColor: stageColors[stage] }}
+                        >
+                          {stage}
+                        </span>
+                        <span className="export-stage-count">
+                          {records.filter((r) => r[3] === stage).length} 条
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="export-config-section">
+                <h3 className="export-config-title">2. 选择导出字段</h3>
+                <div className="export-field-groups">
+                  {Object.entries(EXPORT_FIELD_GROUPS).map(([groupKey, group]) => {
+                    const groupFields = group.fields;
+                    const allSelected = groupFields.every((f) =>
+                      exportSelectedFields.includes(f.key)
+                    );
+                    const someSelected = groupFields.some((f) =>
+                      exportSelectedFields.includes(f.key)
+                    );
+                    return (
+                      <div key={groupKey} className="export-field-group">
+                        <div className="export-field-group-header">
+                          <label className="export-group-select-all">
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              ref={(el) => {
+                                if (el)
+                                  el.indeterminate = someSelected && !allSelected;
+                              }}
+                              onChange={() => selectAllFieldsInGroup(groupKey)}
+                            />
+                            <span className="export-group-name">{group.label}</span>
+                            <span className="export-group-count">
+                              {groupFields.filter((f) => exportSelectedFields.includes(f.key)).length}/
+                              {groupFields.length}
+                            </span>
+                          </label>
+                        </div>
+                        <div className="export-field-checkboxes">
+                          {groupFields.map((field) => (
+                            <label key={field.key} className="export-field-checkbox">
+                              <input
+                                type="checkbox"
+                                checked={exportSelectedFields.includes(field.key)}
+                                onChange={() => toggleFieldSelection(field.key)}
+                              />
+                              <span>{field.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="export-config-section">
+                <h3 className="export-config-title">3. 选择导出格式</h3>
+                <div className="export-format-options">
+                  <label className={`export-format-option ${exportFormat === "csv" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="exportFormat"
+                      checked={exportFormat === "csv"}
+                      onChange={() => setExportFormat("csv")}
+                    />
+                    <div className="export-format-content">
+                      <div className="export-format-icon">📊</div>
+                      <div>
+                        <span className="export-format-label">CSV 格式</span>
+                        <span className="export-format-desc">可直接用 Excel 打开，方便数据整理和统计分析</span>
+                      </div>
+                    </div>
+                  </label>
+                  <label className={`export-format-option ${exportFormat === "html" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="exportFormat"
+                      checked={exportFormat === "html"}
+                      onChange={() => setExportFormat("html")}
+                    />
+                    <div className="export-format-content">
+                      <div className="export-format-icon">📄</div>
+                      <div>
+                        <span className="export-format-label">可打印 HTML</span>
+                        <span className="export-format-desc">生成美观的打印页面，可直接打印或保存为 PDF</span>
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="export-config-summary">
+                <div className="export-summary-item">
+                  <span>导出范围：</span>
+                  <strong>{getExportScopeLabel()}</strong>
+                </div>
+                <div className="export-summary-item">
+                  <span>记录数量：</span>
+                  <strong>{getRecordsForExport().length} 条</strong>
+                </div>
+                <div className="export-summary-item">
+                  <span>导出字段：</span>
+                  <strong>{exportSelectedFields.length} 个</strong>
+                </div>
+                <div className="export-summary-item">
+                  <span>导出格式：</span>
+                  <strong>{exportFormat === "csv" ? "CSV" : "可打印 HTML"}</strong>
+                </div>
+              </div>
+
+              <div className="export-config-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => setShowExportModal(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={handleExport}
+                  disabled={exportSelectedFields.length === 0 || getRecordsForExport().length === 0}
+                >
+                  {exportFormat === "csv" ? "📥 下载 CSV" : "🖨️ 生成打印页面"}
+                </button>
               </div>
             </div>
           </div>
