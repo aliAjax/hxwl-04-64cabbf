@@ -560,6 +560,31 @@ function App() {
     return fieldLabelMap[field] || field;
   };
 
+  const enumFields = new Set(["currentStep", "contactStatus", "confirmedStatus", "referenceApex", "measurementMethod"]);
+
+  const isTextField = (field: string): boolean => {
+    return !enumFields.has(field) && !field.startsWith("timeline_") && field !== "workingLengthDetails";
+  };
+
+  const [mergedValues, setMergedValues] = useState<Record<string, string>>({});
+
+  const getMergedValue = (conflictId: string, defaultSource: "local" | "remote" = "local"): string => {
+    if (mergedValues[conflictId] !== undefined) return mergedValues[conflictId];
+    const conflict = conflicts.find(c => c.id === conflictId);
+    if (!conflict) return "";
+    return defaultSource === "local" ? conflict.localValue : conflict.remoteValue;
+  };
+
+  const setMergedValue = (conflictId: string, value: string) => {
+    setMergedValues(prev => ({ ...prev, [conflictId]: value }));
+  };
+
+  const initMergedValue = (conflictId: string, value: string) => {
+    if (mergedValues[conflictId] === undefined) {
+      setMergedValues(prev => ({ ...prev, [conflictId]: value }));
+    }
+  };
+
   const unresolvedConflicts = conflicts.filter(c => !c.resolved);
 
   const simulateRemoteChanges = () => {
@@ -720,11 +745,21 @@ function App() {
     }, 1500 + Math.random() * 1000);
   };
 
-  const resolveConflict = (conflictId: string, choice: "local" | "remote") => {
+  const resolveConflict = (conflictId: string, resolution: "local" | "remote" | { customValue: string }) => {
     const conflict = conflicts.find(c => c.id === conflictId);
     if (!conflict) return;
 
-    const resolvedValue = choice === "local" ? conflict.localValue : conflict.remoteValue;
+    let resolvedValue: string;
+    let resolutionType: "local" | "remote" | "merged";
+
+    if (typeof resolution === "string") {
+      resolvedValue = resolution === "local" ? conflict.localValue : conflict.remoteValue;
+      resolutionType = resolution;
+    } else {
+      resolvedValue = resolution.customValue;
+      resolutionType = "merged";
+    }
+
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 
     setConflicts(prev => prev.map(c =>
@@ -766,7 +801,19 @@ function App() {
       return c;
     }));
 
-    addOperationLog(conflict.caseId, "更新基础信息", `冲突解决：${getFieldLabel(conflict.field)} 保留${choice === "local" ? "本地" : "远端"}版本「${resolvedValue}」`);
+    let logDetail: string;
+    if (resolutionType === "merged") {
+      logDetail = `冲突解决：${getFieldLabel(conflict.field)} 手动合并，结果「${resolvedValue}」（本地：${conflict.localValue || "空"}，远端：${conflict.remoteValue || "空"}）`;
+    } else {
+      logDetail = `冲突解决：${getFieldLabel(conflict.field)} 保留${resolutionType === "local" ? "本地" : "远端"}版本「${resolvedValue}」`;
+    }
+    addOperationLog(conflict.caseId, "更新基础信息", logDetail);
+
+    setMergedValues(prev => {
+      const next = { ...prev };
+      delete next[conflictId];
+      return next;
+    });
   };
 
   const toggleSyncStatus = () => {
@@ -3322,44 +3369,109 @@ function App() {
                             <h4>未解决冲突 ({caseConflicts.length})</h4>
                           </div>
                           <div className="summary-conflict-list">
-                            {caseConflicts.map(conflict => (
-                              <div key={conflict.id} className="summary-conflict-item">
-                                <div className="summary-conflict-field">
-                                  {getFieldLabel(conflict.field)}
-                                </div>
-                                <div className="summary-conflict-compare">
-                                  <div className="summary-conflict-version summary-conflict-version--local">
-                                    <span className="summary-conflict-role" style={{ color: roleColors[conflict.localChangedBy] }}>
-                                      {conflict.localChangedBy}（本地）
+                            {caseConflicts.map(conflict => {
+                              const textField = isTextField(conflict.field);
+                              const mergedVal = getMergedValue(conflict.id, "local");
+                              return (
+                                <div key={conflict.id} className={`summary-conflict-item ${textField ? "summary-conflict-item--text" : ""}`}>
+                                  <div className="summary-conflict-field">
+                                    {getFieldLabel(conflict.field)}
+                                    <span className={`conflict-field-type ${textField ? "conflict-field-type--text" : "conflict-field-type--enum"}`}>
+                                      {textField ? "可编辑合并" : "二选一"}
                                     </span>
-                                    <span className="summary-conflict-value">{conflict.localValue || "(空)"}</span>
                                   </div>
-                                  <span className="summary-conflict-arrow">↔</span>
-                                  <div className="summary-conflict-version summary-conflict-version--remote">
-                                    <span className="summary-conflict-role" style={{ color: roleColors[conflict.remoteChangedBy] }}>
-                                      {conflict.remoteChangedBy}（远端）
-                                    </span>
-                                    <span className="summary-conflict-value">{conflict.remoteValue || "(空)"}</span>
-                                  </div>
+                                  {textField ? (
+                                    <>
+                                      <div className="summary-conflict-compare">
+                                        <div className="summary-conflict-version summary-conflict-version--local">
+                                          <span className="summary-conflict-role" style={{ color: roleColors[conflict.localChangedBy] }}>
+                                            {conflict.localChangedBy}（本地）
+                                          </span>
+                                          <span className="summary-conflict-value">{conflict.localValue || "(空)"}</span>
+                                        </div>
+                                        <span className="summary-conflict-arrow">↔</span>
+                                        <div className="summary-conflict-version summary-conflict-version--remote">
+                                          <span className="summary-conflict-role" style={{ color: roleColors[conflict.remoteChangedBy] }}>
+                                            {conflict.remoteChangedBy}（远端）
+                                          </span>
+                                          <span className="summary-conflict-value">{conflict.remoteValue || "(空)"}</span>
+                                        </div>
+                                      </div>
+                                      <div className="summary-conflict-merge">
+                                        <div className="summary-conflict-merge-header">
+                                          <span>合并结果（可编辑）</span>
+                                          <div className="summary-conflict-merge-quick">
+                                            <button
+                                              type="button"
+                                              className="summary-conflict-merge-quick-btn"
+                                              onClick={() => setMergedValue(conflict.id, conflict.localValue)}
+                                            >
+                                              用本地值
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="summary-conflict-merge-quick-btn"
+                                              onClick={() => setMergedValue(conflict.id, conflict.remoteValue)}
+                                            >
+                                              用远端值
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <textarea
+                                          className="summary-conflict-merge-textarea"
+                                          value={mergedVal}
+                                          onChange={(e) => setMergedValue(conflict.id, e.target.value)}
+                                          rows={2}
+                                        />
+                                        <div className="summary-conflict-merge-actions">
+                                          <button
+                                            type="button"
+                                            className="summary-conflict-btn summary-conflict-btn--merge"
+                                            onClick={() => resolveConflict(conflict.id, { customValue: mergedVal })}
+                                          >
+                                            ✓ 确认合并
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div className="summary-conflict-compare">
+                                        <div className="summary-conflict-version summary-conflict-version--local">
+                                          <span className="summary-conflict-role" style={{ color: roleColors[conflict.localChangedBy] }}>
+                                            {conflict.localChangedBy}（本地）
+                                          </span>
+                                          <span className="summary-conflict-value">{conflict.localValue || "(空)"}</span>
+                                        </div>
+                                        <span className="summary-conflict-arrow">↔</span>
+                                        <div className="summary-conflict-version summary-conflict-version--remote">
+                                          <span className="summary-conflict-role" style={{ color: roleColors[conflict.remoteChangedBy] }}>
+                                            {conflict.remoteChangedBy}（远端）
+                                          </span>
+                                          <span className="summary-conflict-value">{conflict.remoteValue || "(空)"}</span>
+                                        </div>
+                                      </div>
+                                      <div className="summary-conflict-actions">
+                                        <button
+                                          type="button"
+                                          className="summary-conflict-btn summary-conflict-btn--local"
+                                          onClick={() => resolveConflict(conflict.id, "local")}
+                                        >
+                                          保留本地
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="summary-conflict-btn summary-conflict-btn--remote"
+                                          onClick={() => resolveConflict(conflict.id, "remote")}
+                                        >
+                                          保留远端
+                                        </button>
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
-                                <div className="summary-conflict-actions">
-                                  <button
-                                    type="button"
-                                    className="summary-conflict-btn summary-conflict-btn--local"
-                                    onClick={() => resolveConflict(conflict.id, "local")}
-                                  >
-                                    保留本地
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="summary-conflict-btn summary-conflict-btn--remote"
-                                    onClick={() => resolveConflict(conflict.id, "remote")}
-                                  >
-                                    保留远端
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
@@ -3517,31 +3629,78 @@ function App() {
                                 <span className="basic-info-value">{item.value}</span>
                               )}
                               {conflictForField && (
-                                <div className="field-conflict-detail">
-                                  <span>本地：{conflictForField.localValue}（{conflictForField.localChangedBy}）</span>
-                                  <span>远端：{conflictForField.remoteValue}（{conflictForField.remoteChangedBy}）</span>
-                                  <div className="field-conflict-actions">
-                                    <button
-                                      type="button"
-                                      className="field-conflict-btn field-conflict-btn--local"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        resolveConflict(conflictForField.id, "local");
-                                      }}
-                                    >
-                                      保留本地
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="field-conflict-btn field-conflict-btn--remote"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        resolveConflict(conflictForField.id, "remote");
-                                      }}
-                                    >
-                                      保留远端
-                                    </button>
+                                <div className={`field-conflict-detail ${isTextField(conflictForField.field) ? "field-conflict-detail--text" : ""}`}>
+                                  <div className="field-conflict-detail-versions">
+                                    <span>本地：{conflictForField.localValue || "(空)"}（{conflictForField.localChangedBy}）</span>
+                                    <span>远端：{conflictForField.remoteValue || "(空)"}（{conflictForField.remoteChangedBy}）</span>
                                   </div>
+                                  {isTextField(conflictForField.field) && (
+                                    <div className="field-conflict-merge-inline">
+                                      <textarea
+                                        className="field-conflict-merge-textarea"
+                                        value={getMergedValue(conflictForField.id, "local")}
+                                        onChange={(e) => setMergedValue(conflictForField.id, e.target.value)}
+                                        rows={2}
+                                        placeholder="编辑合并结果..."
+                                      />
+                                      <div className="field-conflict-merge-inline-actions">
+                                        <button
+                                          type="button"
+                                          className="field-conflict-merge-quick-btn"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setMergedValue(conflictForField.id, conflictForField.localValue);
+                                          }}
+                                        >
+                                          ← 本地
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="field-conflict-merge-quick-btn"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setMergedValue(conflictForField.id, conflictForField.remoteValue);
+                                          }}
+                                        >
+                                          远端 →
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="field-conflict-btn field-conflict-btn--merge"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            resolveConflict(conflictForField.id, { customValue: getMergedValue(conflictForField.id, "local") });
+                                          }}
+                                        >
+                                          ✓ 确认合并
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                  {!isTextField(conflictForField.field) && (
+                                    <div className="field-conflict-actions">
+                                      <button
+                                        type="button"
+                                        className="field-conflict-btn field-conflict-btn--local"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          resolveConflict(conflictForField.id, "local");
+                                        }}
+                                      >
+                                        保留本地
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="field-conflict-btn field-conflict-btn--remote"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          resolveConflict(conflictForField.id, "remote");
+                                        }}
+                                      >
+                                        保留远端
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -4499,59 +4658,132 @@ function App() {
             <div className="conflict-list">
               {unresolvedConflicts.map(conflict => {
                 const caseInfo = findCaseInfoById(conflict.caseId);
+                const textField = isTextField(conflict.field);
+                const mergedVal = getMergedValue(conflict.id, "local");
                 return (
-                  <div key={conflict.id} className="conflict-item">
+                  <div key={conflict.id} className={`conflict-item ${textField ? "conflict-item--text" : ""}`}>
                     <div className="conflict-item-header">
                       <h3>{caseInfo?.toothPosition || conflict.caseId.slice(0, 12)}</h3>
-                      <span className="conflict-field-name">{getFieldLabel(conflict.field)}</span>
+                      <span className="conflict-field-name">
+                        {getFieldLabel(conflict.field)}
+                        <span className={`conflict-field-type ${textField ? "conflict-field-type--text" : "conflict-field-type--enum"}`}>
+                          {textField ? "可编辑合并" : "二选一"}
+                        </span>
+                      </span>
                     </div>
-                    <div className="conflict-compare">
-                      <div className="conflict-version conflict-version--local">
-                        <div className="conflict-version-header">
-                          <span
-                            className="conflict-version-role"
-                            style={{ backgroundColor: roleColors[conflict.localChangedBy] + "15", color: roleColors[conflict.localChangedBy] }}
-                          >
-                            {conflict.localChangedBy} · 本地
-                          </span>
-                          <span className="conflict-version-time">{conflict.localChangedAt.split(" ")[1]}</span>
+                    {textField ? (
+                      <div className="conflict-merge">
+                        <div className="conflict-merge-refs">
+                          <div className="conflict-merge-ref conflict-merge-ref--local">
+                            <div className="conflict-merge-ref-header">
+                              <span
+                                className="conflict-version-role"
+                                style={{ backgroundColor: roleColors[conflict.localChangedBy] + "15", color: roleColors[conflict.localChangedBy] }}
+                              >
+                                {conflict.localChangedBy} · 本地
+                              </span>
+                              <span className="conflict-version-time">{conflict.localChangedAt.split(" ")[1]}</span>
+                            </div>
+                            <div className="conflict-merge-ref-value">{conflict.localValue || "(空)"}</div>
+                            <button
+                              type="button"
+                              className="conflict-merge-copy-btn"
+                              onClick={() => setMergedValue(conflict.id, conflict.localValue)}
+                            >
+                              ← 复制到合并
+                            </button>
+                          </div>
+                          <div className="conflict-merge-ref conflict-merge-ref--remote">
+                            <div className="conflict-merge-ref-header">
+                              <span
+                                className="conflict-version-role"
+                                style={{ backgroundColor: roleColors[conflict.remoteChangedBy] + "15", color: roleColors[conflict.remoteChangedBy] }}
+                              >
+                                {conflict.remoteChangedBy} · 远端
+                              </span>
+                              <span className="conflict-version-time">{conflict.remoteChangedAt.split(" ")[1]}</span>
+                            </div>
+                            <div className="conflict-merge-ref-value">{conflict.remoteValue || "(空)"}</div>
+                            <button
+                              type="button"
+                              className="conflict-merge-copy-btn"
+                              onClick={() => setMergedValue(conflict.id, conflict.remoteValue)}
+                            >
+                              复制到合并 →
+                            </button>
+                          </div>
                         </div>
-                        <div className="conflict-version-value">{conflict.localValue || "(空)"}</div>
-                        <button
-                          type="button"
-                          className="conflict-choose-btn conflict-choose-btn--local"
-                          onClick={() => resolveConflict(conflict.id, "local")}
-                        >
-                          保留本地版本
-                        </button>
-                      </div>
-                      <div className="conflict-vs">VS</div>
-                      <div className="conflict-version conflict-version--remote">
-                        <div className="conflict-version-header">
-                          <span
-                            className="conflict-version-role"
-                            style={{ backgroundColor: roleColors[conflict.remoteChangedBy] + "15", color: roleColors[conflict.remoteChangedBy] }}
-                          >
-                            {conflict.remoteChangedBy} · 远端
-                          </span>
-                          <span className="conflict-version-time">{conflict.remoteChangedAt.split(" ")[1]}</span>
+                        <div className="conflict-merge-editor">
+                          <div className="conflict-merge-editor-label">
+                            <span>合并结果（可编辑）</span>
+                          </div>
+                          <textarea
+                            className="conflict-merge-textarea"
+                            value={mergedVal}
+                            onChange={(e) => setMergedValue(conflict.id, e.target.value)}
+                            rows={3}
+                            placeholder="在此编辑最终值..."
+                          />
+                          <div className="conflict-merge-actions">
+                            <button
+                              type="button"
+                              className="conflict-merge-submit-btn"
+                              onClick={() => resolveConflict(conflict.id, { customValue: mergedVal })}
+                            >
+                              ✓ 确认合并结果
+                            </button>
+                          </div>
                         </div>
-                        <div className="conflict-version-value">{conflict.remoteValue || "(空)"}</div>
-                        <button
-                          type="button"
-                          className="conflict-choose-btn conflict-choose-btn--remote"
-                          onClick={() => resolveConflict(conflict.id, "remote")}
-                        >
-                          保留远端版本
-                        </button>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="conflict-compare">
+                        <div className="conflict-version conflict-version--local">
+                          <div className="conflict-version-header">
+                            <span
+                              className="conflict-version-role"
+                              style={{ backgroundColor: roleColors[conflict.localChangedBy] + "15", color: roleColors[conflict.localChangedBy] }}
+                            >
+                              {conflict.localChangedBy} · 本地
+                            </span>
+                            <span className="conflict-version-time">{conflict.localChangedAt.split(" ")[1]}</span>
+                          </div>
+                          <div className="conflict-version-value">{conflict.localValue || "(空)"}</div>
+                          <button
+                            type="button"
+                            className="conflict-choose-btn conflict-choose-btn--local"
+                            onClick={() => resolveConflict(conflict.id, "local")}
+                          >
+                            保留本地版本
+                          </button>
+                        </div>
+                        <div className="conflict-vs">VS</div>
+                        <div className="conflict-version conflict-version--remote">
+                          <div className="conflict-version-header">
+                            <span
+                              className="conflict-version-role"
+                              style={{ backgroundColor: roleColors[conflict.remoteChangedBy] + "15", color: roleColors[conflict.remoteChangedBy] }}
+                            >
+                              {conflict.remoteChangedBy} · 远端
+                            </span>
+                            <span className="conflict-version-time">{conflict.remoteChangedAt.split(" ")[1]}</span>
+                          </div>
+                          <div className="conflict-version-value">{conflict.remoteValue || "(空)"}</div>
+                          <button
+                            type="button"
+                            className="conflict-choose-btn conflict-choose-btn--remote"
+                            onClick={() => resolveConflict(conflict.id, "remote")}
+                          >
+                            保留远端版本
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
             <div className="conflict-footer">
-              <p className="conflict-hint">选择要保留的版本后，另一版本将被覆盖。冲突解决后会自动同步。</p>
+              <p className="conflict-hint">文本字段可编辑合并结果；枚举字段仅支持二选一。冲突解决后会自动同步。</p>
             </div>
           </div>
         </div>
