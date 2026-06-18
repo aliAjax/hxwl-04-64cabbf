@@ -22,9 +22,24 @@ import {
   FieldChange,
   ConflictEntry,
   SyncStatus,
+  ReplayableChange,
+  RemoteSnapshot,
+  ConflictResolution,
+  ChangeEntityType,
   createCaseIdExternal,
   createOperationLog,
 } from "./db";
+import {
+  enterOfflineMode,
+  queueLocalChange,
+  applyRemoteSnapshot,
+  resolveConflict as engineResolveConflict,
+  compressLocalChanges,
+  getFieldLabelForEntity,
+  generateOperationLogDetail,
+  replayLocalChanges,
+  CompressedChangeGroup,
+} from "./syncEngine";
 import {
   buildCaseSummaries,
   generateCSV,
@@ -340,6 +355,9 @@ function App() {
   const [exportSelectedFields, setExportSelectedFields] = useState<string[]>(DEFAULT_SELECTED_FIELDS);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [changeQueue, setChangeQueue] = useState<FieldChange[]>([]);
+  const [replayableChanges, setReplayableChanges] = useState<ReplayableChange[]>([]);
+  const [lastRemoteSnapshot, setLastRemoteSnapshot] = useState<RemoteSnapshot | null>(null);
+  const [offlineStartedAt, setOfflineStartedAt] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("online");
   const [lastSyncAt, setLastSyncAt] = useState<string>("");
@@ -347,7 +365,9 @@ function App() {
   const [showChangeQueuePanel, setShowChangeQueuePanel] = useState<boolean>(false);
   const [simulatingSync, setSimulatingSync] = useState<boolean>(false);
   const [changeQueueFilter, setChangeQueueFilter] = useState<"all" | "pending" | "synced" | "conflict">("all");
+  const [changeQueueSourceFilter, setChangeQueueSourceFilter] = useState<"all" | "local" | "remote">("all");
   const [changeQueueRoleFilter, setChangeQueueRoleFilter] = useState<string>("all");
+  const [expandedChangeId, setExpandedChangeId] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [showBatchPanel, setShowBatchPanel] = useState<boolean>(false);
   const [batchFilterType, setBatchFilterType] = useState<"overdue" | "within3days" | "pending">("overdue");
@@ -381,9 +401,12 @@ function App() {
         setTimelines(migrated.timelines);
         setActiveStage(migrated.activeStage);
         setChangeQueue(migrated.changeQueue || []);
+        setReplayableChanges(migrated.replayableChanges || []);
+        setLastRemoteSnapshot(migrated.lastRemoteSnapshot || null);
         setConflicts(migrated.conflicts || []);
         setSyncStatus(migrated.syncStatus || "online");
         setLastSyncAt(migrated.lastSyncAt || new Date().toISOString().replace("T", " ").slice(0, 19));
+        setOfflineStartedAt(migrated.offlineStartedAt || null);
         isInitialized.current = true;
         isPersistEnabled.current = true;
 
@@ -510,12 +533,15 @@ function App() {
       timelines,
       activeStage,
       changeQueue,
+      replayableChanges,
+      lastRemoteSnapshot,
       conflicts,
       syncStatus,
       lastSyncAt,
+      offlineStartedAt,
     };
     saveData(data).catch(err => console.error("保存数据失败：", err));
-  }, [records, caseInfos, operationLogs, followUpPlans, workingLengths, timelines, activeStage, changeQueue, conflicts, syncStatus, lastSyncAt]);
+  }, [records, caseInfos, operationLogs, followUpPlans, workingLengths, timelines, activeStage, changeQueue, replayableChanges, lastRemoteSnapshot, conflicts, syncStatus, lastSyncAt, offlineStartedAt]);
 
   const addOperationLog = (
     caseId: string,
@@ -622,10 +648,48 @@ function App() {
     timelines,
     activeStage,
     changeQueue,
+    replayableChanges,
+    lastRemoteSnapshot,
     conflicts,
     syncStatus,
     lastSyncAt,
+    offlineStartedAt,
   });
+
+  const applyDataState = (data: AppData) => {
+    setRecords(data.records);
+    setCaseInfos(data.caseInfos);
+    setFollowUpPlans(data.followUpPlans);
+    setWorkingLengths(data.workingLengths);
+    setTimelines(data.timelines);
+    setActiveStage(data.activeStage);
+    setChangeQueue(data.changeQueue);
+    setReplayableChanges(data.replayableChanges);
+    setLastRemoteSnapshot(data.lastRemoteSnapshot);
+    setConflicts(data.conflicts);
+    setSyncStatus(data.syncStatus);
+    setLastSyncAt(data.lastSyncAt);
+    setOfflineStartedAt(data.offlineStartedAt);
+  };
+
+  const queueReplayableChange = (params: {
+    caseId: string;
+    entityType: ChangeEntityType;
+    entityId: string;
+    field: string;
+    oldValue: string;
+    newValue: string;
+  }) => {
+    if (params.oldValue === params.newValue) return;
+    const currentData = getCurrentAppData();
+    const operatorName =
+      currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
+    const { data: newData } = queueLocalChange(currentData, {
+      ...params,
+      changedBy: currentRole,
+    });
+    applyDataState(newData);
+  };
 
   const performConsistencyCheck = async (silent: boolean = false, inputData?: AppData) => {
     setIsCheckingConsistency(true);
@@ -781,121 +845,86 @@ function App() {
     const targetCases = shuffled.slice(0, numCases);
 
     setTimeout(() => {
-      const newConflicts: ConflictEntry[] = [];
-      const newChanges: FieldChange[] = [];
+      const simulatedCaseInfos = caseInfos.map(c => ({ ...c }));
+      const simulatedFollowUpPlans = followUpPlans.map(p => ({ ...p }));
+      const simulatedWorkingLengths = workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
+      const simulatedTimelines = timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
+      const simulatedRecords = records.map(r => [...r]);
 
       targetCases.forEach((caseInfo, idx) => {
         const caseId = caseInfo.id;
-        const localPending = changeQueue.filter(c => c.caseId === caseId && c.syncStatus === "pending");
-        let hasConflict = false;
-
         const rolesToSimulate = idx === 0 ? allRoles : [randomRole];
 
-        rolesToSimulate.forEach((simRole, roleIdx) => {
+        rolesToSimulate.forEach((simRole) => {
           const fields = getFieldsForRole(simRole);
           const fieldDef = fields[Math.floor(Math.random() * fields.length)];
           const remoteValue = fieldDef.getValue(caseInfo);
-          const localChange = localPending.find(c => c.field === fieldDef.field);
-          const currentValue = String(caseInfo[fieldDef.field as keyof CaseBasicInfo] || "");
-
-          if (localChange && localChange.newValue !== remoteValue && localChange.changedBy !== simRole) {
-            newConflicts.push({
-              id: `conflict_${Date.now()}_${idx}_${roleIdx}`,
-              caseId,
-              field: fieldDef.field,
-              localValue: localChange.newValue,
-              localChangedBy: localChange.changedBy,
-              localChangedAt: localChange.changedAt,
-              remoteValue,
-              remoteChangedBy: simRole,
-              remoteChangedAt: now,
-              resolved: false,
-            });
-            hasConflict = true;
-          } else if (!localChange && remoteValue !== currentValue) {
-            newChanges.push({
-              id: `fc_remote_${Date.now()}_${idx}_${roleIdx}`,
-              caseId,
-              field: fieldDef.field,
-              oldValue: currentValue,
-              newValue: remoteValue,
-              changedBy: simRole,
-              changedAt: now,
-              syncStatus: "synced",
-            });
-            setCaseInfos(prev => prev.map(c =>
-              c.id === caseId ? { ...c, [fieldDef.field]: remoteValue, updatedAt: now.split(" ")[0] } : c
-            ));
+          const targetInfo = simulatedCaseInfos.find(c => c.id === caseId);
+          if (targetInfo) {
+            const currentValue = String(targetInfo[fieldDef.field as keyof CaseBasicInfo] || "");
+            if (remoteValue !== currentValue) {
+              (targetInfo as any)[fieldDef.field] = remoteValue;
+              targetInfo.updatedAt = now.split(" ")[0];
+            }
           }
         });
 
-        if (!hasConflict) {
-          const followUp = followUpPlans.find(f => f.caseId === caseId);
-          if (followUp && Math.random() > 0.5) {
-            const contactStatuses: ContactStatus[] = ["已联系", "已确认", "未接通"];
-            const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
-            if (followUp.contactStatus !== newContactStatus) {
-              const localChange = localPending.find(c => c.field === "contactStatus");
-              if (localChange && localChange.newValue !== newContactStatus) {
-                newConflicts.push({
-                  id: `conflict_${Date.now()}_${idx}_fu`,
-                  caseId,
-                  field: "contactStatus",
-                  localValue: localChange.newValue,
-                  localChangedBy: localChange.changedBy,
-                  localChangedAt: localChange.changedAt,
-                  remoteValue: newContactStatus,
-                  remoteChangedBy: "前台",
-                  remoteChangedAt: now,
-                  resolved: false,
-                });
-                hasConflict = true;
-              } else if (!localChange) {
-                newChanges.push({
-                  id: `fc_remote_${Date.now()}_${idx}_fu`,
-                  caseId,
-                  field: "contactStatus",
-                  oldValue: followUp.contactStatus,
-                  newValue: newContactStatus,
-                  changedBy: "前台",
-                  changedAt: now,
-                  syncStatus: "synced",
-                });
-                setFollowUpPlans(prev => prev.map(p =>
-                  p.caseId === caseId ? { ...p, contactStatus: newContactStatus } : p
-                ));
-              }
-            }
+        const followUp = simulatedFollowUpPlans.find(f => f.caseId === caseId);
+        if (followUp && Math.random() > 0.5) {
+          const contactStatuses: ContactStatus[] = ["已联系", "已确认", "未接通"];
+          const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
+          if (followUp.contactStatus !== newContactStatus) {
+            followUp.contactStatus = newContactStatus;
           }
-        }
-
-        if (hasConflict) {
-          setChangeQueue(prev => prev.map(c => {
-            if (c.caseId === caseId && newConflicts.some(cf => cf.field === c.field)) {
-              return { ...c, syncStatus: "conflict" as const };
-            }
-            return c;
-          }));
         }
       });
 
-      const conflictFields = newConflicts.map(c => `${c.caseId}:${c.field}`);
-      setChangeQueue(prev => {
-        const updated = prev.map(c => {
-          if (c.syncStatus === "pending" && !conflictFields.includes(`${c.caseId}:${c.field}`)) {
-            return { ...c, syncStatus: "synced" as const };
-          }
-          return c;
+      simulatedCaseInfos.forEach(ci => {
+        const idx = simulatedRecords.findIndex(r => r[0] === ci.id);
+        if (idx >= 0) {
+          const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
+          const detailParts: string[] = [];
+          if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
+          if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
+          if (ci.medication) detailParts.push(`封药：${ci.medication}`);
+          if (ci.remark) detailParts.push(ci.remark);
+          simulatedRecords[idx] = [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
+        }
+      });
+
+      const currentData = getCurrentAppData();
+      const simRole = allRoles[Math.floor(Math.random() * allRoles.length)];
+      const { data: newData, result } = applyRemoteSnapshot(
+        currentData,
+        {
+          caseInfos: simulatedCaseInfos,
+          followUpPlans: simulatedFollowUpPlans,
+          workingLengths: simulatedWorkingLengths,
+          timelines: simulatedTimelines,
+          records: simulatedRecords,
+        },
+        simRole
+      );
+
+      applyDataState(newData);
+      setOperationLogs(prev => {
+        const logs: OperationLog[] = [];
+        result.appliedChanges.forEach(change => {
+          logs.push(createOperationLog(
+            change.caseId,
+            change.changedBy === "医生" ? "张医生" : change.changedBy === "助理" ? "李助理" : "王前台",
+            change.changedBy,
+            "更新基础信息",
+            `[远端同步] ${generateOperationLogDetail(change)}`
+          ));
         });
-        return [...newChanges, ...updated];
+        return [...logs.reverse(), ...prev];
       });
-      if (newConflicts.length > 0) {
-        setConflicts(prev => [...newConflicts, ...prev]);
+
+      if (result.conflicts.length > 0) {
         setShowConflictModal(true);
       }
 
-      setSyncStatus("online");
-      setLastSyncAt(now);
       setSimulatingSync(false);
     }, 1500 + Math.random() * 1000);
   };
@@ -951,76 +980,25 @@ function App() {
     }
 
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+    const conflictRes: ConflictResolution = {
+      strategy: resolutionType,
+      resolvedValue,
+      resolvedBy: currentRole,
+      resolvedAt: now,
+    };
 
-    setConflicts(prev => prev.map(c =>
-      c.id === conflictId
-        ? {
-            ...c,
-            resolved: true,
-            resolvedValue,
-            resolvedAt: now,
-            resolvedBy: currentRole,
-          }
-        : c
-    ));
-
-    const caseInfoFields = ["toothPosition", "patientName", "phone", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
-    if (caseInfoFields.includes(conflict.field)) {
-      const recordFields = ["toothPosition", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
-      const needsRecordUpdate = recordFields.includes(conflict.field);
-
-      setCaseInfos(prev => prev.map(c => {
-        if (c.id === conflict.caseId) {
-          const updatedCaseInfo = { ...c, [conflict.field]: resolvedValue, updatedAt: now.split(" ")[0] };
-          
-          if (needsRecordUpdate) {
-            setRecords(prevRecords => prevRecords.map(r => {
-              if (r[0] !== conflict.caseId) return r;
-              
-              const newRecord = [...r];
-              if (conflict.field === "toothPosition") newRecord[1] = resolvedValue;
-              if (conflict.field === "diagnosis") newRecord[2] = resolvedValue;
-              if (conflict.field === "currentStep") {
-                newRecord[3] = resolvedValue;
-                newRecord[5] = resolvedValue === "充填" ? "已充填" : "待复诊";
-              }
-              
-              const detailFields = ["workingLength", "mainFileNumber", "medication", "remark"];
-              if (detailFields.includes(conflict.field)) {
-                newRecord[4] = buildRecordDetail(updatedCaseInfo);
-              }
-              return newRecord;
-            }));
-          }
-          
-          return updatedCaseInfo;
-        }
-        return c;
-      }));
-    }
-
-    const followUpFields = ["contactStatus", "nextDate", "doctor", "reason", "contactNote", "patientName", "phone"];
-    if (followUpFields.includes(conflict.field)) {
-      setFollowUpPlans(prev => prev.map(p => {
-        if (p.caseId === conflict.caseId) {
-          return { ...p, [conflict.field]: resolvedValue } as FollowUpPlan;
-        }
-        return p;
-      }));
-    }
-
-    setChangeQueue(prev => prev.map(c => {
-      if (c.caseId === conflict.caseId && c.field === conflict.field) {
-        return { ...c, syncStatus: "synced" as const, newValue: resolvedValue };
-      }
-      return c;
-    }));
+    const currentData = getCurrentAppData();
+    const resolvedData = engineResolveConflict(currentData, conflictId, conflictRes);
+    applyDataState(resolvedData);
 
     let logDetail: string;
+    const fieldLabel = conflict.entityType && conflict.field
+      ? getFieldLabelForEntity(conflict.entityType, conflict.field)
+      : getFieldLabel(conflict.field);
     if (resolutionType === "merged") {
-      logDetail = `冲突解决：${getFieldLabel(conflict.field)} 手动合并，结果「${resolvedValue}」（本地：${conflict.localValue || "空"}，远端：${conflict.remoteValue || "空"}）`;
+      logDetail = `冲突解决：${fieldLabel} 手动合并，结果「${resolvedValue}」（本地：${conflict.localValue || "空"}，远端：${conflict.remoteValue || "空"}）`;
     } else {
-      logDetail = `冲突解决：${getFieldLabel(conflict.field)} 保留${resolutionType === "local" ? "本地" : "远端"}版本「${resolvedValue}」`;
+      logDetail = `冲突解决：${fieldLabel} 保留${resolutionType === "local" ? "本地" : "远端"}版本「${resolvedValue}」`;
     }
     addOperationLog(conflict.caseId, "更新基础信息", logDetail);
 
@@ -1032,7 +1010,25 @@ function App() {
   };
 
   const toggleSyncStatus = () => {
-    setSyncStatus(prev => prev === "online" ? "offline" : "online");
+    if (syncStatus === "online") {
+      const currentData = getCurrentAppData();
+      const offlineData = enterOfflineMode(currentData);
+      applyDataState(offlineData);
+      addOperationLog("system", "更新基础信息", `进入离线模式，本地变更将暂存至恢复在线后同步`);
+    } else if (syncStatus === "offline") {
+      const currentData = getCurrentAppData();
+      const { data: replayedData, replayed } = replayLocalChanges(currentData);
+      applyDataState({
+        ...replayedData,
+        syncStatus: "online",
+        offlineStartedAt: null,
+      });
+      if (replayed.length > 0) {
+        addOperationLog("system", "更新基础信息", `恢复在线，已回放 ${replayed.length} 条本地变更`);
+      } else {
+        addOperationLog("system", "更新基础信息", `恢复在线，无待回放本地变更`);
+      }
+    }
   };
 
   const findCaseInfoByTooth = (toothPosition: string): CaseBasicInfo | undefined =>
@@ -1325,6 +1321,24 @@ function App() {
         const newEntrySummary = validEntries.map(e => `${e.canalName}:${e.measuredLength}`).join(",");
         if (oldEntrySummary !== newEntrySummary) {
           recordFieldChange(caseId, "workingLengthDetails", oldEntrySummary, newEntrySummary);
+          queueReplayableChange({
+            caseId,
+            entityType: "workingLength",
+            entityId: canalDraft.editingId,
+            field: "entries",
+            oldValue: oldEntrySummary,
+            newValue: newEntrySummary,
+          });
+        }
+        if (existingWl.note !== canalDraft.note) {
+          queueReplayableChange({
+            caseId,
+            entityType: "workingLength",
+            entityId: canalDraft.editingId,
+            field: "note",
+            oldValue: existingWl.note,
+            newValue: canalDraft.note,
+          });
         }
       }
       setWorkingLengths(prev => prev.map(w =>
@@ -1395,6 +1409,15 @@ function App() {
     const oldStep = caseInfo?.currentStep || "";
 
     if (oldStep === derivedStep) return;
+
+    queueReplayableChange({
+      caseId,
+      entityType: "caseBasicInfo",
+      entityId: caseId,
+      field: "currentStep",
+      oldValue: oldStep,
+      newValue: derivedStep,
+    });
 
     setCaseInfos(prev => prev.map(c =>
       c.id === caseId ? { ...c, currentStep: derivedStep, updatedAt: today } : c
@@ -1520,6 +1543,14 @@ function App() {
         const newVal = String(basicInfoDraft![field] || "");
         if (oldVal !== newVal) {
           recordFieldChange(selectedCaseId, field, oldVal, newVal);
+          queueReplayableChange({
+            caseId: selectedCaseId,
+            entityType: "caseBasicInfo",
+            entityId: selectedCaseId,
+            field,
+            oldValue: oldVal,
+            newValue: newVal,
+          });
         }
       });
     }
@@ -1546,12 +1577,50 @@ function App() {
 
     setFollowUpPlans(prev => prev.map(p => {
       if (p.caseId === selectedCaseId || p.toothPosition === updatedInfo.toothPosition) {
+        const oldPatientName = p.patientName;
+        const oldPhone = p.phone;
+        const oldToothPosition = p.toothPosition;
+        const newPatientName = updatedInfo.patientName || p.patientName;
+        const newPhone = updatedInfo.phone;
+        const newToothPosition = updatedInfo.toothPosition;
+
+        if (oldPatientName !== newPatientName) {
+          queueReplayableChange({
+            caseId: selectedCaseId,
+            entityType: "followUpPlan",
+            entityId: p.id,
+            field: "patientName",
+            oldValue: oldPatientName,
+            newValue: newPatientName,
+          });
+        }
+        if (oldPhone !== newPhone) {
+          queueReplayableChange({
+            caseId: selectedCaseId,
+            entityType: "followUpPlan",
+            entityId: p.id,
+            field: "phone",
+            oldValue: oldPhone,
+            newValue: newPhone,
+          });
+        }
+        if (oldToothPosition !== newToothPosition) {
+          queueReplayableChange({
+            caseId: selectedCaseId,
+            entityType: "followUpPlan",
+            entityId: p.id,
+            field: "toothPosition",
+            oldValue: oldToothPosition,
+            newValue: newToothPosition,
+          });
+        }
+
         return {
           ...p,
           caseId: selectedCaseId,
-          patientName: updatedInfo.patientName || p.patientName,
-          phone: updatedInfo.phone,
-          toothPosition: updatedInfo.toothPosition,
+          patientName: newPatientName,
+          phone: newPhone,
+          toothPosition: newToothPosition,
         };
       }
       return p;
@@ -1608,9 +1677,28 @@ function App() {
     }
 
     const currentTimeline = findTimeline(selectedToothPosition);
+    const existingNode = currentTimeline?.nodes.find(n => n.id === node.id);
     const newNodes = currentTimeline
       ? currentTimeline.nodes.map(n => (n.id === node.id ? node : n))
       : [node];
+
+    if (selectedCaseId && existingNode) {
+      const trackableFields: (keyof TimelineNode)[] = ["completedAt", "operator", "keyParams", "exceptionNotes", "isCompleted"];
+      trackableFields.forEach(field => {
+        const oldVal = String((existingNode as any)[field] || "");
+        const newVal = String((node as any)[field] || "");
+        if (oldVal !== newVal) {
+          queueReplayableChange({
+            caseId: selectedCaseId,
+            entityType: "timelineNode",
+            entityId: node.id,
+            field,
+            oldValue: oldVal,
+            newValue: newVal,
+          });
+        }
+      });
+    }
 
     setTimelines(prev => prev.map(timeline => {
       if (timeline.toothPosition !== selectedToothPosition) return timeline;
@@ -1660,21 +1748,58 @@ function App() {
       }
     }
 
+    const newCompletedAt = newIsCompleted && !targetNode.completedAt.trim()
+      ? new Date().toISOString().replace("T", " ").slice(0, 16)
+      : targetNode.completedAt;
+    const newOperator = newIsCompleted && !targetNode.operator.trim()
+      ? defaultOperator
+      : targetNode.operator;
+
     const newNodes = timeline.nodes.map(n => {
       if (n.id === nodeId) {
         return {
           ...n,
           isCompleted: newIsCompleted,
-          completedAt: newIsCompleted && !n.completedAt.trim()
-            ? new Date().toISOString().replace("T", " ").slice(0, 16)
-            : n.completedAt,
-          operator: newIsCompleted && !n.operator.trim()
-            ? defaultOperator
-            : n.operator,
+          completedAt: newCompletedAt,
+          operator: newOperator,
         };
       }
       return n;
     });
+
+    const caseId = selectedCaseId || findCaseIdByTooth(timelineId);
+    if (caseId) {
+      if (String(targetNode.isCompleted) !== String(newIsCompleted)) {
+        queueReplayableChange({
+          caseId,
+          entityType: "timelineNode",
+          entityId: nodeId,
+          field: "isCompleted",
+          oldValue: String(targetNode.isCompleted),
+          newValue: String(newIsCompleted),
+        });
+      }
+      if (targetNode.completedAt !== newCompletedAt) {
+        queueReplayableChange({
+          caseId,
+          entityType: "timelineNode",
+          entityId: nodeId,
+          field: "completedAt",
+          oldValue: targetNode.completedAt,
+          newValue: newCompletedAt,
+        });
+      }
+      if (targetNode.operator !== newOperator) {
+        queueReplayableChange({
+          caseId,
+          entityType: "timelineNode",
+          entityId: nodeId,
+          field: "operator",
+          oldValue: targetNode.operator,
+          newValue: newOperator,
+        });
+      }
+    }
 
     setTimelines(prev => prev.map(tl =>
       tl.toothPosition === timelineId ? { ...tl, nodes: newNodes } : tl
@@ -1854,6 +1979,14 @@ function App() {
         const newVal = String(plan![field] || "");
         if (oldVal !== newVal) {
           recordFieldChange(plan!.caseId, field, oldVal, newVal);
+          queueReplayableChange({
+            caseId: plan!.caseId,
+            entityType: "followUpPlan",
+            entityId: followUpEditDraft.id!,
+            field,
+            oldValue: oldVal,
+            newValue: newVal,
+          });
         }
       });
     }
@@ -1872,6 +2005,14 @@ function App() {
     if (!plan || plan.contactStatus === status) return;
 
     recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, status);
+    queueReplayableChange({
+      caseId: plan.caseId,
+      entityType: "followUpPlan",
+      entityId: planId,
+      field: "contactStatus",
+      oldValue: plan.contactStatus,
+      newValue: status,
+    });
     addOperationLog(plan.caseId, "更新联系状态", `更新复诊联系状态为「${status}」`);
 
     setFollowUpPlans(prev => prev.map(p =>
@@ -1891,8 +2032,24 @@ function App() {
 
     if (plan.contactStatus !== "已确认") {
       recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, "已确认");
+      queueReplayableChange({
+        caseId: plan.caseId,
+        entityType: "followUpPlan",
+        entityId: planId,
+        field: "contactStatus",
+        oldValue: plan.contactStatus,
+        newValue: "已确认",
+      });
     }
     recordFieldChange(plan.caseId, "contactNote", plan.contactNote, newContactNote);
+    queueReplayableChange({
+      caseId: plan.caseId,
+      entityType: "followUpPlan",
+      entityId: planId,
+      field: "contactNote",
+      oldValue: plan.contactNote,
+      newValue: newContactNote,
+    });
 
     addOperationLog(
       plan.caseId,
@@ -1969,6 +2126,39 @@ function App() {
 
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 
+    validPlans.forEach(plan => {
+      if (plan.contactStatus !== batchTargetStatus) {
+        recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, batchTargetStatus);
+        queueReplayableChange({
+          caseId: plan.caseId,
+          entityType: "followUpPlan",
+          entityId: plan.id,
+          field: "contactStatus",
+          oldValue: plan.contactStatus,
+          newValue: batchTargetStatus,
+        });
+      }
+      if (batchNoteTemplate.trim()) {
+        const newNote = plan.contactNote
+          ? `${plan.contactNote}\n【${now}】${batchNoteTemplate.trim()}`
+          : `【${now}】${batchNoteTemplate.trim()}`;
+        recordFieldChange(plan.caseId, "contactNote", plan.contactNote, newNote);
+        queueReplayableChange({
+          caseId: plan.caseId,
+          entityType: "followUpPlan",
+          entityId: plan.id,
+          field: "contactNote",
+          oldValue: plan.contactNote,
+          newValue: newNote,
+        });
+      }
+      addOperationLog(
+        plan.caseId,
+        "批量更新联系状态",
+        `${plan.toothPosition} ${plan.patientName || ""}：${plan.contactStatus} → ${batchTargetStatus}${batchNoteTemplate.trim() ? "，备注：" + batchNoteTemplate.trim() : ""}`
+      );
+    });
+
     setFollowUpPlans(prev => prev.map(plan => {
       if (!batchSelectedIds.has(plan.id)) return plan;
       if (plan.contactStatus === "已取消" && batchTargetStatus === "已确认") return plan;
@@ -1980,23 +2170,6 @@ function App() {
           : plan.contactNote,
       };
     }));
-
-    validPlans.forEach(plan => {
-      if (plan.contactStatus !== batchTargetStatus) {
-        recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, batchTargetStatus);
-      }
-      if (batchNoteTemplate.trim()) {
-        const newNote = plan.contactNote
-          ? `${plan.contactNote}\n【${now}】${batchNoteTemplate.trim()}`
-          : `【${now}】${batchNoteTemplate.trim()}`;
-        recordFieldChange(plan.caseId, "contactNote", plan.contactNote, newNote);
-      }
-      addOperationLog(
-        plan.caseId,
-        "批量更新联系状态",
-        `${plan.toothPosition} ${plan.patientName || ""}：${plan.contactStatus} → ${batchTargetStatus}${batchNoteTemplate.trim() ? "，备注：" + batchNoteTemplate.trim() : ""}`
-      );
-    });
 
     setBatchConfirmOpen(false);
     setBatchSelectedIds(new Set());
@@ -2075,7 +2248,7 @@ function App() {
               className={`change-queue-btn ${unresolvedConflicts.length > 0 ? "has-conflicts" : ""}`}
               onClick={() => setShowChangeQueuePanel(prev => !prev)}
             >
-              变更队列 ({changeQueue.length})
+              变更队列 ({replayableChanges.length})
               {unresolvedConflicts.length > 0 && (
                 <span className="conflict-badge">{unresolvedConflicts.length} 冲突</span>
               )}
@@ -2125,10 +2298,15 @@ function App() {
         <section className="collab-panel panel">
           <div className="section-heading">
             <div>
-              <p>离线协作 · 变更队列</p>
+              <p>离线协作 · 可回放变更队列</p>
               <h2>
-                本地变更记录
-                <span className="record-total">共 {changeQueue.length} 条 · {unresolvedConflicts.length} 冲突未解决</span>
+                变更记录
+                <span className="record-total">共 {replayableChanges.length} 条 · {unresolvedConflicts.length} 冲突未解决</span>
+                {offlineStartedAt && syncStatus === "offline" && (
+                  <span className="record-total" style={{ marginLeft: 12, color: "#b45309" }}>
+                    离线中：已持续 {Math.floor((Date.now() - new Date(offlineStartedAt).getTime()) / 60000)} 分钟
+                  </span>
+                )}
               </h2>
             </div>
             <div className="collab-panel-actions">
@@ -2157,11 +2335,11 @@ function App() {
               <span>当前状态</span>
             </div>
             <div className="collab-sync-stat">
-              <strong>{changeQueue.filter(c => c.syncStatus === "pending").length}</strong>
+              <strong>{replayableChanges.filter(c => c.syncStatus === "pending").length}</strong>
               <span>待同步</span>
             </div>
             <div className="collab-sync-stat">
-              <strong>{changeQueue.filter(c => c.syncStatus === "synced").length}</strong>
+              <strong>{replayableChanges.filter(c => c.syncStatus === "synced").length}</strong>
               <span>已同步</span>
             </div>
             <div className="collab-sync-stat collab-sync-stat--conflict">
@@ -2171,6 +2349,10 @@ function App() {
             <div className="collab-sync-stat">
               <strong>{lastSyncAt ? lastSyncAt.split(" ")[1] : "-"}</strong>
               <span>上次同步</span>
+            </div>
+            <div className="collab-sync-stat">
+              <strong>{replayableChanges.filter(c => c.compressedFrom && c.compressedFrom.length > 0).length}</strong>
+              <span>已压缩</span>
             </div>
           </div>
           <div className="collab-filters">
@@ -2188,6 +2370,25 @@ function App() {
                     type="button"
                     className={`collab-filter-chip ${changeQueueFilter === item.key ? "collab-filter-chip--active" : ""}`}
                     onClick={() => setChangeQueueFilter(item.key as any)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="collab-filter-group">
+              <span className="collab-filter-label">来源：</span>
+              <div className="collab-filter-chips">
+                {[
+                  { key: "all", label: "全部" },
+                  { key: "local", label: "本地" },
+                  { key: "remote", label: "远端" },
+                ].map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`collab-filter-chip ${changeQueueSourceFilter === item.key ? "collab-filter-chip--active" : ""}`}
+                    onClick={() => setChangeQueueSourceFilter(item.key as "all" | "local" | "remote")}
                   >
                     {item.label}
                   </button>
@@ -2217,12 +2418,14 @@ function App() {
           </div>
           <div className="collab-queue-list">
             {(() => {
-              const filtered = changeQueue.filter(c => {
+              const filtered = replayableChanges.filter(c => {
                 if (changeQueueFilter !== "all" && c.syncStatus !== changeQueueFilter) return false;
+                if (changeQueueSourceFilter !== "all" && c.source !== changeQueueSourceFilter) return false;
                 if (changeQueueRoleFilter !== "all" && c.changedBy !== changeQueueRoleFilter) return false;
                 return true;
               });
-              if (filtered.length === 0) {
+              const { compressed } = compressLocalChanges(filtered);
+              if (compressed.length === 0) {
                 return (
                   <div className="empty-state">
                     <p>暂无符合条件的变更记录</p>
@@ -2230,9 +2433,11 @@ function App() {
                   </div>
                 );
               }
-              return filtered.slice(0, 30).map(change => {
+              return compressed.slice(0, 40).map(change => {
                 const caseInfo = findCaseInfoById(change.caseId);
                 const isConflict = change.syncStatus === "conflict";
+                const isCompressed = change.compressedFrom && change.compressedFrom.length > 0;
+                const isExpanded = expandedChangeId === change.id;
                 return (
                   <div key={change.id} className={`collab-queue-item ${isConflict ? "collab-queue-item--conflict" : ""}`}>
                     <div className="collab-queue-left">
@@ -2248,12 +2453,24 @@ function App() {
                         <span className="collab-queue-case">
                           {caseInfo?.toothPosition || change.caseId.slice(0, 12)}
                         </span>
-                        <span className="collab-queue-field">{getFieldLabel(change.field)}</span>
+                        <span className="collab-queue-field">{getFieldLabelForEntity(change.entityType, change.field)}</span>
                         <span
                           className={`collab-queue-status collab-queue-status--${change.syncStatus}`}
                         >
                           {change.syncStatus === "pending" ? "待同步" : change.syncStatus === "synced" ? "已同步" : "冲突"}
                         </span>
+                        <span className={`collab-queue-source collab-queue-source--${change.source}`}>
+                          {change.source === "local" ? "本地" : "远端"}
+                        </span>
+                        {isCompressed && (
+                          <button
+                            type="button"
+                            className="collab-queue-expand-btn"
+                            onClick={() => setExpandedChangeId(isExpanded ? null : change.id)}
+                          >
+                            {isExpanded ? "收起" : "展开"} ({change.compressedFrom!.length} 条)
+                          </button>
+                        )}
                       </div>
                       <div className="collab-queue-diff">
                         <span className="collab-queue-old">{change.oldValue || "(空)"}</span>
@@ -2263,7 +2480,28 @@ function App() {
                       <div className="collab-queue-meta">
                         <span style={{ color: roleColors[change.changedBy] }}>{change.changedBy}</span>
                         <span>{change.changedAt}</span>
+                        {isCompressed && (
+                          <span className="collab-queue-compressed-info">
+                            已合并 {change.compressedFrom!.length} 次连续修改
+                          </span>
+                        )}
                       </div>
+                      {isCompressed && isExpanded && (
+                        <div className="collab-queue-compressed-history">
+                          <p className="collab-queue-history-title">变更历史（原始 {change.compressedFrom!.length} 条）：</p>
+                          {replayableChanges
+                            .filter(c => change.compressedFrom!.includes(c.id))
+                            .sort((a, b) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime())
+                            .map(orig => (
+                              <div key={orig.id} className="collab-queue-history-item">
+                                <span className="collab-queue-old">{orig.oldValue || "(空)"}</span>
+                                <span className="collab-queue-arrow">→</span>
+                                <span className="collab-queue-new">{orig.newValue || "(空)"}</span>
+                                <span className="collab-queue-history-time">{orig.changedAt}</span>
+                              </div>
+                            ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -2933,9 +3171,9 @@ function App() {
                 : 0;
               const timeline = findTimeline(toothPosition);
               const currentStepIdx = timeline ? getCurrentStepIndex(timeline.nodes) : -1;
-              const casePendingChanges = changeQueue.filter(c => c.caseId === caseId && c.syncStatus === "pending").length;
+              const casePendingChanges = replayableChanges.filter(c => c.caseId === caseId && c.syncStatus === "pending").length;
               const caseConflicts = conflicts.filter(c => c.caseId === caseId && !c.resolved).length;
-              const caseSyncedChanges = changeQueue.filter(c => c.caseId === caseId && c.syncStatus === "synced").length;
+              const caseSyncedChanges = replayableChanges.filter(c => c.caseId === caseId && c.syncStatus === "synced").length;
               return (
                 <article key={caseId + index} className="record-card" onClick={() => openDetailModal(caseId, activeStage ? "stage" : "list")}>
                   <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
@@ -5213,7 +5451,7 @@ function App() {
                     <div className="conflict-item-header">
                       <h3>{caseInfo?.toothPosition || conflict.caseId.slice(0, 12)}</h3>
                       <span className="conflict-field-name">
-                        {getFieldLabel(conflict.field)}
+                        {getFieldLabelForEntity(conflict.entityType, conflict.field)}
                         <span className={`conflict-field-type ${textField ? "conflict-field-type--text" : "conflict-field-type--enum"}`}>
                           {textField ? "可编辑合并" : "二选一"}
                         </span>
@@ -5221,6 +5459,19 @@ function App() {
                     </div>
                     {textField ? (
                       <div className="conflict-merge">
+                        <div className="conflict-base-ref" style={{ marginBottom: 12 }}>
+                          <div className="conflict-merge-ref-header">
+                            <span
+                              className="conflict-version-role"
+                              style={{ backgroundColor: "#64748b15", color: "#64748b" }}
+                            >
+                              基准快照（离线时）
+                            </span>
+                          </div>
+                          <div className="conflict-merge-ref-value" style={{ color: "#64748b", fontStyle: "italic" }}>
+                            {conflict.baseValue || "(空)"}
+                          </div>
+                        </div>
                         <div className="conflict-merge-refs">
                           <div className="conflict-merge-ref conflict-merge-ref--local">
                             <div className="conflict-merge-ref-header">
@@ -5285,6 +5536,19 @@ function App() {
                       </div>
                     ) : (
                       <div className="conflict-compare">
+                        <div className="conflict-version conflict-version--base" style={{ gridColumn: "1 / -1", marginBottom: 4 }}>
+                          <div className="conflict-version-header">
+                            <span
+                              className="conflict-version-role"
+                              style={{ backgroundColor: "#64748b15", color: "#64748b" }}
+                            >
+                              基准快照（离线时）
+                            </span>
+                          </div>
+                          <div className="conflict-version-value" style={{ color: "#64748b", fontStyle: "italic" }}>
+                            {conflict.baseValue || "(空)"}
+                          </div>
+                        </div>
                         <div className="conflict-version conflict-version--local">
                           <div className="conflict-version-header">
                             <span

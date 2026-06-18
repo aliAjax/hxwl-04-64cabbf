@@ -116,6 +116,15 @@ export interface FormErrors {
 
 export type SyncStatus = "online" | "offline" | "syncing";
 
+export type ChangeSource = "local" | "remote";
+
+export type ChangeEntityType =
+  | "caseBasicInfo"
+  | "followUpPlan"
+  | "workingLength"
+  | "timelineNode"
+  | "caseRecord";
+
 export interface FieldChange {
   id: string;
   caseId: string;
@@ -127,20 +136,56 @@ export interface FieldChange {
   syncStatus: "pending" | "synced" | "conflict";
 }
 
+export interface ReplayableChange {
+  id: string;
+  caseId: string;
+  entityType: ChangeEntityType;
+  entityId: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+  changedBy: UserRole;
+  changedAt: string;
+  source: ChangeSource;
+  syncStatus: "pending" | "synced" | "conflict";
+  parentChangeId?: string;
+  compressedFrom?: string[];
+}
+
+export interface RemoteSnapshot {
+  id: string;
+  snapshotAt: string;
+  caseInfos: CaseBasicInfo[];
+  followUpPlans: FollowUpPlan[];
+  workingLengths: WorkingLengthRecord[];
+  timelines: TreatmentTimeline[];
+  records: string[][];
+}
+
+export interface ConflictResolution {
+  strategy: "local" | "remote" | "merged";
+  resolvedValue: string;
+  resolvedBy: UserRole;
+  resolvedAt: string;
+}
+
 export interface ConflictEntry {
   id: string;
   caseId: string;
   field: string;
+  entityType: ChangeEntityType;
+  entityId: string;
+  localChangeId: string;
   localValue: string;
   localChangedBy: UserRole;
   localChangedAt: string;
+  remoteChangeId: string;
   remoteValue: string;
   remoteChangedBy: UserRole;
   remoteChangedAt: string;
+  baseValue: string;
   resolved: boolean;
-  resolvedValue?: string;
-  resolvedAt?: string;
-  resolvedBy?: UserRole;
+  resolution?: ConflictResolution;
 }
 
 export interface AppData {
@@ -152,9 +197,12 @@ export interface AppData {
   timelines: TreatmentTimeline[];
   activeStage: string | null;
   changeQueue: FieldChange[];
+  replayableChanges: ReplayableChange[];
+  lastRemoteSnapshot: RemoteSnapshot | null;
   conflicts: ConflictEntry[];
   syncStatus: SyncStatus;
   lastSyncAt: string;
+  offlineStartedAt: string | null;
 }
 
 function createCaseId(): string {
@@ -398,6 +446,94 @@ const initialWorkingLengths: WorkingLengthRecord[] = [
   },
 ];
 
+function createReplayableChangeId(): string {
+  return `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createConflictId(): string {
+  return `conflict_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createSnapshotId(): string {
+  return `snap_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function createReplayableChange(params: {
+  caseId: string;
+  entityType: ChangeEntityType;
+  entityId: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+  changedBy: UserRole;
+  source?: ChangeSource;
+  syncStatus?: "pending" | "synced" | "conflict";
+  parentChangeId?: string;
+  compressedFrom?: string[];
+}): ReplayableChange {
+  return {
+    id: createReplayableChangeId(),
+    caseId: params.caseId,
+    entityType: params.entityType,
+    entityId: params.entityId,
+    field: params.field,
+    oldValue: params.oldValue,
+    newValue: params.newValue,
+    changedBy: params.changedBy,
+    changedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+    source: params.source || "local",
+    syncStatus: params.syncStatus || "pending",
+    parentChangeId: params.parentChangeId,
+    compressedFrom: params.compressedFrom,
+  };
+}
+
+export function createRemoteSnapshot(data: {
+  caseInfos: CaseBasicInfo[];
+  followUpPlans: FollowUpPlan[];
+  workingLengths: WorkingLengthRecord[];
+  timelines: TreatmentTimeline[];
+  records: string[][];
+}): RemoteSnapshot {
+  return {
+    id: createSnapshotId(),
+    snapshotAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+    caseInfos: JSON.parse(JSON.stringify(data.caseInfos)),
+    followUpPlans: JSON.parse(JSON.stringify(data.followUpPlans)),
+    workingLengths: JSON.parse(JSON.stringify(data.workingLengths)),
+    timelines: JSON.parse(JSON.stringify(data.timelines)),
+    records: JSON.parse(JSON.stringify(data.records)),
+  };
+}
+
+export function createConflictEntry(params: {
+  caseId: string;
+  field: string;
+  entityType: ChangeEntityType;
+  entityId: string;
+  localChange: ReplayableChange;
+  remoteChange: ReplayableChange;
+  baseValue: string;
+}): ConflictEntry {
+  return {
+    id: createConflictId(),
+    caseId: params.caseId,
+    field: params.field,
+    entityType: params.entityType,
+    entityId: params.entityId,
+    localChangeId: params.localChange.id,
+    localValue: params.localChange.newValue,
+    localChangedBy: params.localChange.changedBy,
+    localChangedAt: params.localChange.changedAt,
+    remoteChangeId: params.remoteChange.id,
+    remoteValue: params.remoteChange.newValue,
+    remoteChangedBy: params.remoteChange.changedBy,
+    remoteChangedAt: params.remoteChange.changedAt,
+    baseValue: params.baseValue,
+    resolved: false,
+  };
+}
+
 export const getInitialData = (): AppData => ({
   records: projectData.records,
   caseInfos: projectData.caseInfos,
@@ -407,9 +543,12 @@ export const getInitialData = (): AppData => ({
   timelines: initialTimelines,
   activeStage: null,
   changeQueue: [],
+  replayableChanges: [],
+  lastRemoteSnapshot: null,
   conflicts: [],
   syncStatus: "online",
   lastSyncAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+  offlineStartedAt: null,
 });
 
 const DATA_KEY = "main";
