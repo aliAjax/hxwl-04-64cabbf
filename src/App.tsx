@@ -61,13 +61,11 @@ import {
   RepairPlan,
   ConsistencyIssueType,
   ConsistencySeverity,
-  checkConsistency,
-  generateRepairPreview,
-  applyRepairs,
-  getIssueTypeLabel,
-  getSeverityColor,
-  getSeverityLabel,
 } from "./consistency";
+import { useExportConfig } from "./hooks/useExportConfig";
+import { useSyncConflict } from "./hooks/useSyncConflict";
+import { useConsistencyCheck } from "./hooks/useConsistencyCheck";
+import { useFollowUpContact } from "./hooks/useFollowUpContact";
 
 const project = {
   "id": "hxwl-04",
@@ -348,41 +346,7 @@ function App() {
     plan: null,
   });
   const [showFollowUpEditModal, setShowFollowUpEditModal] = useState<boolean>(false);
-  const [showExportModal, setShowExportModal] = useState<boolean>(false);
-  const [exportScope, setExportScope] = useState<ExportScope>("filtered");
-  const [exportCustomStages, setExportCustomStages] = useState<string[]>([]);
-  const [exportSelectedFields, setExportSelectedFields] = useState<string[]>(DEFAULT_SELECTED_FIELDS);
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
-  const [changeQueue, setChangeQueue] = useState<FieldChange[]>([]);
-  const [replayableChanges, setReplayableChanges] = useState<ReplayableChange[]>([]);
-  const [lastRemoteSnapshot, setLastRemoteSnapshot] = useState<RemoteSnapshot | null>(null);
-  const [offlineStartedAt, setOfflineStartedAt] = useState<string | null>(null);
-  const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>("online");
-  const [lastSyncAt, setLastSyncAt] = useState<string>("");
-  const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
-  const [showChangeQueuePanel, setShowChangeQueuePanel] = useState<boolean>(false);
-  const [simulatingSync, setSimulatingSync] = useState<boolean>(false);
-  const [changeQueueFilter, setChangeQueueFilter] = useState<"all" | "pending" | "synced" | "conflict">("all");
-  const [changeQueueSourceFilter, setChangeQueueSourceFilter] = useState<"all" | "local" | "remote">("all");
-  const [changeQueueRoleFilter, setChangeQueueRoleFilter] = useState<string>("all");
-  const [expandedChangeId, setExpandedChangeId] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState<string>("");
-  const [showBatchPanel, setShowBatchPanel] = useState<boolean>(false);
-  const [batchFilterType, setBatchFilterType] = useState<"overdue" | "within3days" | "pending">("overdue");
-  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
-  const [batchTargetStatus, setBatchTargetStatus] = useState<ContactStatus>("已联系");
-  const [batchNoteTemplate, setBatchNoteTemplate] = useState<string>("");
-  const [batchConfirmOpen, setBatchConfirmOpen] = useState<boolean>(false);
-  const [consistencyIssues, setConsistencyIssues] = useState<ConsistencyIssue[]>([]);
-  const [showConsistencyPanel, setShowConsistencyPanel] = useState<boolean>(false);
-  const [showRepairPreview, setShowRepairPreview] = useState<boolean>(false);
-  const [repairPreview, setRepairPreview] = useState<RepairPreview | null>(null);
-  const [isCheckingConsistency, setIsCheckingConsistency] = useState<boolean>(false);
-  const [isApplyingRepairs, setIsApplyingRepairs] = useState<boolean>(false);
-  const [lastConsistencyCheck, setLastConsistencyCheck] = useState<string>("");
-  const [consistencyFilter, setConsistencyFilter] = useState<"all" | "error" | "warning" | "info">("all");
-  const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
 
   const isInitialized = useRef(false);
   const isPersistEnabled = useRef(false);
@@ -575,13 +539,7 @@ function App() {
     setChangeQueue(prev => [change, ...prev]);
   };
 
-  const getFieldChangeForCase = (caseId: string, field: string): FieldChange | undefined => {
-    return changeQueue.find(c => c.caseId === caseId && c.field === field);
-  };
 
-  const getLatestFieldChangeForCase = (caseId: string, field: string): FieldChange | undefined => {
-    return changeQueue.find(c => c.caseId === caseId && c.field === field);
-  };
 
   const fieldLabelMap: Record<string, string> = {
     toothPosition: "牙位",
@@ -607,488 +565,13 @@ function App() {
     "timeline_充填": "充填步骤",
   };
 
-  const getFieldLabel = (field: string): string => {
-    return fieldLabelMap[field] || field;
-  };
-
   const enumFields = new Set(["currentStep", "contactStatus", "confirmedStatus", "referenceApex", "measurementMethod", "isCompleted"]);
 
   const isTextField = (field: string): boolean => {
     return !enumFields.has(field) && !field.startsWith("timeline_") && field !== "workingLengthDetails" && !field.startsWith("entries.") && !field.startsWith("record[");
   };
 
-  const [mergedValues, setMergedValues] = useState<Record<string, string>>({});
 
-  const getMergedValue = (conflictId: string, defaultSource: "local" | "remote" = "local"): string => {
-    if (mergedValues[conflictId] !== undefined) return mergedValues[conflictId];
-    const conflict = conflicts.find(c => c.id === conflictId);
-    if (!conflict) return "";
-    return defaultSource === "local" ? conflict.localValue : conflict.remoteValue;
-  };
-
-  const setMergedValue = (conflictId: string, value: string) => {
-    setMergedValues(prev => ({ ...prev, [conflictId]: value }));
-  };
-
-  const initMergedValue = (conflictId: string, value: string) => {
-    if (mergedValues[conflictId] === undefined) {
-      setMergedValues(prev => ({ ...prev, [conflictId]: value }));
-    }
-  };
-
-  const unresolvedConflicts = conflicts.filter(c => !c.resolved);
-
-  const getCurrentAppData = (): AppData => ({
-    records,
-    caseInfos,
-    operationLogs,
-    followUpPlans,
-    workingLengths,
-    timelines,
-    activeStage,
-    changeQueue,
-    replayableChanges,
-    lastRemoteSnapshot,
-    conflicts,
-    syncStatus,
-    lastSyncAt,
-    offlineStartedAt,
-  });
-
-  const applyDataState = (data: AppData) => {
-    setRecords(data.records);
-    setCaseInfos(data.caseInfos);
-    setFollowUpPlans(data.followUpPlans);
-    setWorkingLengths(data.workingLengths);
-    setTimelines(data.timelines);
-    setActiveStage(data.activeStage);
-    setChangeQueue(data.changeQueue);
-    setReplayableChanges(data.replayableChanges);
-    setLastRemoteSnapshot(data.lastRemoteSnapshot);
-    setConflicts(data.conflicts);
-    setSyncStatus(data.syncStatus);
-    setLastSyncAt(data.lastSyncAt);
-    setOfflineStartedAt(data.offlineStartedAt);
-  };
-
-  const queueReplayableChange = (params: {
-    caseId: string;
-    entityType: ChangeEntityType;
-    entityId: string;
-    field: string;
-    oldValue: string;
-    newValue: string;
-  }) => {
-    if (params.oldValue === params.newValue) return;
-    const currentData = getCurrentAppData();
-    const operatorName =
-      currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
-    const { data: newData } = queueLocalChange(currentData, {
-      ...params,
-      changedBy: currentRole,
-    });
-    applyDataState(newData);
-  };
-
-  const performConsistencyCheck = async (silent: boolean = false, inputData?: AppData) => {
-    setIsCheckingConsistency(true);
-    try {
-      const data = inputData || getCurrentAppData();
-      const issues = checkConsistency(data);
-      setConsistencyIssues(issues);
-      setLastConsistencyCheck(new Date().toISOString().replace("T", " ").slice(0, 19));
-
-      if (!silent && issues.length > 0) {
-        const errorCount = issues.filter(i => i.severity === "error").length;
-        const warningCount = issues.filter(i => i.severity === "warning").length;
-        if (errorCount > 0 || warningCount > 0) {
-          setShowConsistencyPanel(true);
-        }
-      }
-
-      return issues;
-    } catch (err) {
-      console.error("一致性校验失败：", err);
-      if (!silent) {
-        alert("一致性校验失败，请查看控制台。");
-      }
-      return [];
-    } finally {
-      setIsCheckingConsistency(false);
-    }
-  };
-
-  const generateRepairPlanPreview = () => {
-    const data = getCurrentAppData();
-    const preview = generateRepairPreview(consistencyIssues, data);
-    setRepairPreview(preview);
-    setShowRepairPreview(true);
-  };
-
-  const toggleRepairPlanSelection = (issueId: string) => {
-    if (!repairPreview) return;
-    setRepairPreview({
-      ...repairPreview,
-      plans: repairPreview.plans.map(p =>
-        p.issueId === issueId ? { ...p, selected: !p.selected } : p
-      ),
-    });
-  };
-
-  const selectAllRepairPlans = () => {
-    if (!repairPreview) return;
-    setRepairPreview({
-      ...repairPreview,
-      plans: repairPreview.plans.map(p =>
-        p.actions.length > 0 ? { ...p, selected: true } : p
-      ),
-    });
-  };
-
-  const deselectAllRepairPlans = () => {
-    if (!repairPreview) return;
-    setRepairPreview({
-      ...repairPreview,
-      plans: repairPreview.plans.map(p => ({ ...p, selected: false })),
-    });
-  };
-
-  const applySelectedRepairs = async () => {
-    if (!repairPreview) return;
-
-    if (!confirm("确认应用选中的修复方案吗？修复操作将直接修改数据，但会保留所有操作日志和待同步变更。")) {
-      return;
-    }
-
-    setIsApplyingRepairs(true);
-    try {
-      const data = getCurrentAppData();
-      const { data: newData, result } = applyRepairs(repairPreview, data);
-
-      if (!result.success) {
-        alert(`部分修复失败：\n${result.errors.join("\n")}`);
-      }
-
-      const operatorName =
-        currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
-
-      const repairLog: OperationLog = {
-        id: `log_repair_${Date.now()}`,
-        caseId: "system",
-        operator: operatorName,
-        role: currentRole,
-        action: "更新基础信息",
-        detail: `数据一致性修复：已应用 ${result.appliedCount} 项修复，跳过 ${result.skippedCount} 项，失败 ${result.failedCount} 项`,
-        timestamp: new Date().toISOString().replace("T", " ").slice(0, 19),
-      };
-
-      setRecords(newData.records);
-      setCaseInfos(newData.caseInfos);
-      setFollowUpPlans(newData.followUpPlans);
-      setWorkingLengths(newData.workingLengths);
-      setTimelines(newData.timelines);
-      setOperationLogs(prev => [repairLog, ...prev]);
-
-      setShowRepairPreview(false);
-      setRepairPreview(null);
-
-      setTimeout(() => {
-        performConsistencyCheck(true);
-      }, 300);
-
-      alert(`修复完成：\n• 成功应用：${result.appliedCount} 项\n• 跳过：${result.skippedCount} 项\n• 失败：${result.failedCount} 项`);
-    } catch (err) {
-      console.error("应用修复失败：", err);
-      alert("应用修复失败，请查看控制台。");
-    } finally {
-      setIsApplyingRepairs(false);
-    }
-  };
-
-  const buildSimulatedRemoteSnapshot = (baseData: AppData) => {
-    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-    const allRoles: UserRole[] = ["医生", "助理", "前台"];
-    const randomRole = allRoles[Math.floor(Math.random() * allRoles.length)];
-
-    const doctorFields = [
-      { field: "diagnosis", getValue: (c: CaseBasicInfo) => c.diagnosis ? c.diagnosis + "（复查确认）" : "慢性牙髓炎" },
-      { field: "currentStep", getValue: () => treatmentSteps[Math.floor(Math.random() * treatmentSteps.length)] },
-      { field: "workingLength", getValue: (c: CaseBasicInfo) => c.workingLength ? c.workingLength.replace(/[\d.]+/, (parseFloat(c.workingLength) + 0.3).toFixed(1)) : "20.0mm" },
-    ];
-
-    const assistantFields = [
-      { field: "medication", getValue: () => ["Ca(OH)2 封药", "碘仿糊剂", "CP 棉球", "氢氧化钙糊剂"][Math.floor(Math.random() * 4)] },
-      { field: "mainFileNumber", getValue: (c: CaseBasicInfo) => c.mainFileNumber ? String(parseInt(c.mainFileNumber) + 5) : "25" },
-      { field: "remark", getValue: (c: CaseBasicInfo) => c.remark ? c.remark + "；助理补充记录" : "治疗过程顺利" },
-    ];
-
-    const receptionFields = [
-      { field: "patientName", getValue: (c: CaseBasicInfo) => c.patientName + "（已核实）" },
-      { field: "phone", getValue: (c: CaseBasicInfo) => c.phone ? c.phone.replace(/\d{4}$/, "9999") : "138****9999" },
-    ];
-
-    const getFieldsForRole = (role: UserRole) => {
-      switch (role) {
-        case "医生": return doctorFields;
-        case "助理": return assistantFields;
-        case "前台": return receptionFields;
-      }
-    };
-
-    const numCases = Math.min(3 + Math.floor(Math.random() * 3), caseInfos.length);
-    const shuffled = [...baseData.caseInfos].sort(() => Math.random() - 0.5);
-    const targetCases = shuffled.slice(0, numCases);
-
-    const simulatedCaseInfos = baseData.caseInfos.map(c => ({ ...c }));
-    const simulatedFollowUpPlans = baseData.followUpPlans.map(p => ({ ...p }));
-    const simulatedWorkingLengths = baseData.workingLengths.map(w => ({ ...w, entries: w.entries.map(e => ({ ...e })) }));
-    const simulatedTimelines = baseData.timelines.map(t => ({ ...t, nodes: t.nodes.map(n => ({ ...n })) }));
-    const simulatedRecords = baseData.records.map(r => [...r]);
-
-    targetCases.forEach((caseInfo, idx) => {
-      const caseId = caseInfo.id;
-      const rolesToSimulate = idx === 0 ? allRoles : [randomRole];
-
-      rolesToSimulate.forEach((simRole) => {
-        const fields = getFieldsForRole(simRole);
-        const fieldDef = fields[Math.floor(Math.random() * fields.length)];
-        const remoteValue = fieldDef.getValue(caseInfo);
-        const targetInfo = simulatedCaseInfos.find(c => c.id === caseId);
-        if (targetInfo) {
-          const currentValue = String(targetInfo[fieldDef.field as keyof CaseBasicInfo] || "");
-          if (remoteValue !== currentValue) {
-            (targetInfo as any)[fieldDef.field] = remoteValue;
-            targetInfo.updatedAt = now.split(" ")[0];
-          }
-        }
-      });
-
-      const followUp = simulatedFollowUpPlans.find(f => f.caseId === caseId);
-      if (followUp && Math.random() > 0.5) {
-        const contactStatuses: ContactStatus[] = ["已联系", "已确认", "未接通"];
-        const newContactStatus = contactStatuses[Math.floor(Math.random() * contactStatuses.length)];
-        if (followUp.contactStatus !== newContactStatus) {
-          followUp.contactStatus = newContactStatus;
-        }
-      }
-
-      const wl = simulatedWorkingLengths.find(w => w.caseId === caseId);
-      if (wl && Math.random() > 0.6) {
-        const randomEntry = wl.entries[Math.floor(Math.random() * wl.entries.length)];
-        if (randomEntry) {
-          const newLength = (parseFloat(randomEntry.measuredLength) + (Math.random() > 0.5 ? 0.5 : -0.3)).toFixed(1);
-          if (parseFloat(newLength) > 0) {
-            randomEntry.measuredLength = newLength;
-          }
-        }
-        if (Math.random() > 0.7) {
-          wl.note = wl.note ? wl.note + "；远端更新" : "远端补充备注";
-        }
-      }
-
-      const tl = simulatedTimelines.find(t => t.caseId === caseId);
-      if (tl && Math.random() > 0.6) {
-        const incompleteNodes = tl.nodes.filter(n => !n.isCompleted);
-        if (incompleteNodes.length > 0) {
-          const targetNode = incompleteNodes[Math.floor(Math.random() * incompleteNodes.length)];
-          targetNode.isCompleted = true;
-          targetNode.completedAt = now;
-          targetNode.operator = "李医生";
-          targetNode.keyParams = "远端确认完成";
-        } else {
-          const completedNodes = tl.nodes.filter(n => n.isCompleted);
-          if (completedNodes.length > 0) {
-            const targetNode = completedNodes[Math.floor(Math.random() * completedNodes.length)];
-            if (Math.random() > 0.5) {
-              targetNode.keyParams = targetNode.keyParams ? targetNode.keyParams + "（远端修订）" : "远端更新参数";
-            }
-          }
-        }
-      }
-    });
-
-    simulatedCaseInfos.forEach(ci => {
-      const idx = simulatedRecords.findIndex(r => r[0] === ci.id);
-      if (idx >= 0) {
-        const status = ci.currentStep === "充填" ? "已充填" : "待复诊";
-        const detailParts: string[] = [];
-        if (ci.workingLength) detailParts.push(`工作长度 ${ci.workingLength}`);
-        if (ci.mainFileNumber) detailParts.push(`主尖锉${ci.mainFileNumber}`);
-        if (ci.medication) detailParts.push(`封药：${ci.medication}`);
-        if (ci.remark) detailParts.push(ci.remark);
-        simulatedRecords[idx] = [ci.id, ci.toothPosition, ci.diagnosis, ci.currentStep, detailParts.join("，") || "无附加信息", status];
-      }
-    });
-
-    return {
-      remoteSnapshot: {
-        caseInfos: simulatedCaseInfos,
-        followUpPlans: simulatedFollowUpPlans,
-        workingLengths: simulatedWorkingLengths,
-        timelines: simulatedTimelines,
-        records: simulatedRecords,
-      },
-      remoteChangedBy: allRoles[Math.floor(Math.random() * allRoles.length)],
-    };
-  };
-
-  const simulateRemoteChanges = () => {
-    if (caseInfos.length === 0) return;
-    setSimulatingSync(true);
-    setSyncStatus("syncing");
-
-    setTimeout(() => {
-      const currentData = getCurrentAppData();
-      const { remoteSnapshot, remoteChangedBy } = buildSimulatedRemoteSnapshot(currentData);
-      const { data: newData, result } = applyRemoteSnapshot(currentData, remoteSnapshot, remoteChangedBy);
-
-      applyDataState(newData);
-      setOperationLogs(prev => {
-        const logs: OperationLog[] = [];
-        result.appliedChanges.forEach(change => {
-          logs.push(createOperationLog(
-            change.caseId,
-            change.changedBy === "医生" ? "张医生" : change.changedBy === "助理" ? "李助理" : "王前台",
-            change.changedBy,
-            "更新基础信息",
-            `[远端同步] ${generateOperationLogDetail(change)}`
-          ));
-        });
-        return [...logs.reverse(), ...prev];
-      });
-
-      if (result.conflicts.length > 0) {
-        setShowConflictModal(true);
-      }
-
-      setSimulatingSync(false);
-    }, 1500 + Math.random() * 1000);
-  };
-
-  const buildRecordDetail = (caseInfo: CaseBasicInfo): string => {
-    const details: string[] = [];
-    if (caseInfo.workingLength) details.push(`工作长度 ${caseInfo.workingLength}`);
-    if (caseInfo.mainFileNumber) details.push(`主尖锉${caseInfo.mainFileNumber}`);
-    if (caseInfo.medication) details.push(`封药：${caseInfo.medication}`);
-    if (caseInfo.remark) details.push(caseInfo.remark);
-    return details.join("，") || "无附加信息";
-  };
-
-  const syncRecordsFromCaseInfo = (caseId: string, updatedFields?: string[]) => {
-    const caseInfo = findCaseInfoById(caseId);
-    if (!caseInfo) return;
-
-    const fieldsToUpdate = updatedFields || ["toothPosition", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
-    const needsDetailUpdate = fieldsToUpdate.some(f => 
-      ["workingLength", "mainFileNumber", "medication", "remark"].includes(f)
-    );
-
-    setRecords(prev => prev.map(r => {
-      if (r[0] !== caseId) return r;
-      
-      const newRecord = [...r];
-      if (fieldsToUpdate.includes("toothPosition")) newRecord[1] = caseInfo.toothPosition;
-      if (fieldsToUpdate.includes("diagnosis")) newRecord[2] = caseInfo.diagnosis;
-      if (fieldsToUpdate.includes("currentStep")) {
-        newRecord[3] = caseInfo.currentStep;
-        newRecord[5] = caseInfo.currentStep === "充填" ? "已充填" : "待复诊";
-      }
-      if (needsDetailUpdate) {
-        newRecord[4] = buildRecordDetail(caseInfo);
-      }
-      return newRecord;
-    }));
-  };
-
-  const resolveConflict = (conflictId: string, resolution: "local" | "remote" | { customValue: string }) => {
-    const conflict = conflicts.find(c => c.id === conflictId);
-    if (!conflict) return;
-
-    let resolvedValue: string;
-    let resolutionType: "local" | "remote" | "merged";
-
-    if (typeof resolution === "string") {
-      resolvedValue = resolution === "local" ? conflict.localValue : conflict.remoteValue;
-      resolutionType = resolution;
-    } else {
-      resolvedValue = resolution.customValue;
-      resolutionType = "merged";
-    }
-
-    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-    const conflictRes: ConflictResolution = {
-      strategy: resolutionType,
-      resolvedValue,
-      resolvedBy: currentRole,
-      resolvedAt: now,
-    };
-
-    const currentData = getCurrentAppData();
-    const resolvedData = engineResolveConflict(currentData, conflictId, conflictRes);
-    applyDataState(resolvedData);
-
-    let logDetail: string;
-    const fieldLabel = conflict.entityType && conflict.field
-      ? getFieldLabelForEntity(conflict.entityType, conflict.field)
-      : getFieldLabel(conflict.field);
-    if (resolutionType === "merged") {
-      logDetail = `冲突解决：${fieldLabel} 手动合并，结果「${resolvedValue}」（本地：${conflict.localValue || "空"}，远端：${conflict.remoteValue || "空"}）`;
-    } else {
-      logDetail = `冲突解决：${fieldLabel} 保留${resolutionType === "local" ? "本地" : "远端"}版本「${resolvedValue}」`;
-    }
-    addOperationLog(conflict.caseId, "更新基础信息", logDetail);
-
-    setMergedValues(prev => {
-      const next = { ...prev };
-      delete next[conflictId];
-      return next;
-    });
-  };
-
-  const toggleSyncStatus = () => {
-    if (syncStatus === "online") {
-      const currentData = getCurrentAppData();
-      const offlineData = enterOfflineMode(currentData);
-      applyDataState(offlineData);
-      addOperationLog("system", "更新基础信息", `进入离线模式，本地变更将暂存至恢复在线后同步`);
-    } else if (syncStatus === "offline") {
-      const currentData = getCurrentAppData();
-      const remoteBaseData = currentData.lastRemoteSnapshot
-        ? {
-            ...currentData,
-            caseInfos: currentData.lastRemoteSnapshot.caseInfos,
-            followUpPlans: currentData.lastRemoteSnapshot.followUpPlans,
-            workingLengths: currentData.lastRemoteSnapshot.workingLengths,
-            timelines: currentData.lastRemoteSnapshot.timelines,
-            records: currentData.lastRemoteSnapshot.records,
-          }
-        : currentData;
-      const { remoteSnapshot, remoteChangedBy } = buildSimulatedRemoteSnapshot(remoteBaseData);
-      const { data: syncedData, result } = applyRemoteSnapshot(currentData, remoteSnapshot, remoteChangedBy);
-      applyDataState(syncedData);
-      setOperationLogs(prev => {
-        const logs: OperationLog[] = [];
-        result.appliedChanges.forEach(change => {
-          logs.push(createOperationLog(
-            change.caseId,
-            change.changedBy === "医生" ? "张医生" : change.changedBy === "助理" ? "李助理" : "王前台",
-            change.changedBy,
-            "更新基础信息",
-            `[恢复在线远端快照] ${generateOperationLogDetail(change)}`
-          ));
-        });
-        return [...logs.reverse(), ...prev];
-      });
-      if (result.conflicts.length > 0) {
-        setShowConflictModal(true);
-        addOperationLog("system", "更新基础信息", `恢复在线，检测到 ${result.conflicts.length} 个远端快照冲突`);
-      } else if (result.appliedChanges.length > 0) {
-        addOperationLog("system", "更新基础信息", `恢复在线，已应用 ${result.appliedChanges.length} 条远端快照变更并同步本地队列`);
-      } else {
-        addOperationLog("system", "更新基础信息", `恢复在线，无远端快照变更或待处理冲突`);
-      }
-    }
-  };
 
   const findCaseInfoByTooth = (toothPosition: string): CaseBasicInfo | undefined =>
     caseInfos.find(c => c.toothPosition === toothPosition);
@@ -1112,6 +595,207 @@ function App() {
     const rec = findRecordByCaseId(caseId);
     return rec ? rec[1] : null;
   };
+
+  const currentUser =
+    currentRole === "医生" ? "张医生" : currentRole === "助理" ? "李助理" : "王前台";
+
+  const getCurrentOperatorName = (): string => currentUser;
+
+  const getFilterLabel = (): string => {
+    const stageLabel = activeStage ? `${activeStage}阶段` : "全部病例";
+    if (searchKeyword.trim()) {
+      return `${stageLabel} · 搜索「${searchKeyword.trim()}」`;
+    }
+    return stageLabel;
+  };
+
+  const syncHook = useSyncConflict({
+    currentRole,
+    records,
+    setRecords,
+    caseInfos,
+    setCaseInfos,
+    operationLogs,
+    setOperationLogs,
+    followUpPlans,
+    setFollowUpPlans,
+    workingLengths,
+    setWorkingLengths,
+    timelines,
+    setTimelines,
+    activeStage,
+    setActiveStage,
+    findCaseInfoById,
+    addOperationLog,
+    TreatmentStep: treatmentSteps,
+    fieldLabelMap,
+  });
+
+  const {
+    changeQueue,
+    setChangeQueue,
+    replayableChanges,
+    setReplayableChanges,
+    lastRemoteSnapshot,
+    setLastRemoteSnapshot,
+    offlineStartedAt,
+    setOfflineStartedAt,
+    conflicts,
+    setConflicts,
+    syncStatus,
+    setSyncStatus,
+    lastSyncAt,
+    setLastSyncAt,
+    showConflictModal,
+    setShowConflictModal,
+    showChangeQueuePanel,
+    setShowChangeQueuePanel,
+    simulatingSync,
+    setSimulatingSync,
+    changeQueueFilter,
+    setChangeQueueFilter,
+    changeQueueSourceFilter,
+    setChangeQueueSourceFilter,
+    changeQueueRoleFilter,
+    setChangeQueueRoleFilter,
+    expandedChangeId,
+    setExpandedChangeId,
+    mergedValues,
+    setMergedValues,
+    unresolvedConflicts,
+    getFieldChangeForCase,
+    getLatestFieldChangeForCase,
+    getFieldLabel,
+    getMergedValue,
+    setMergedValue,
+    initMergedValue,
+    getCurrentAppData,
+    applyDataState,
+    queueReplayableChange,
+    buildSimulatedRemoteSnapshot,
+    simulateRemoteChanges,
+    buildRecordDetail,
+    syncRecordsFromCaseInfo,
+    resolveConflict,
+    toggleSyncStatus,
+    compressLocalChanges,
+  } = syncHook;
+
+  const consistencyHook = useConsistencyCheck({
+    currentRole,
+    records,
+    caseInfos,
+    followUpPlans,
+    workingLengths,
+    timelines,
+    operationLogs,
+    setCaseInfos,
+    setFollowUpPlans,
+    setWorkingLengths,
+    setTimelines,
+    setRecords,
+    setOperationLogs,
+    getCurrentAppData,
+    applyDataState,
+    findCaseInfoById,
+    addOperationLog,
+  });
+
+  const {
+    consistencyIssues,
+    setConsistencyIssues,
+    showConsistencyPanel,
+    setShowConsistencyPanel,
+    showRepairPreview,
+    setShowRepairPreview,
+    repairPreview,
+    setRepairPreview,
+    isCheckingConsistency,
+    setIsCheckingConsistency,
+    isApplyingRepairs,
+    setIsApplyingRepairs,
+    lastConsistencyCheck,
+    setLastConsistencyCheck,
+    consistencyFilter,
+    setConsistencyFilter,
+    expandedIssueId,
+    setExpandedIssueId,
+    filteredIssues,
+    performConsistencyCheck,
+    generateRepairPlanPreview,
+    toggleRepairPlanSelection,
+    selectAllRepairPlans,
+    deselectAllRepairPlans,
+    applySelectedRepairs,
+  } = consistencyHook;
+
+  const exportHook = useExportConfig({
+    records,
+    filteredRecords,
+    caseInfos,
+    followUpPlans,
+    workingLengths,
+    operationLogs,
+    timelines,
+    activeStage,
+    searchKeyword,
+  });
+
+  const {
+    showExportModal,
+    setShowExportModal,
+    exportScope,
+    setExportScope,
+    exportCustomStages,
+    setExportCustomStages,
+    exportSelectedFields,
+    setExportSelectedFields,
+    exportFormat,
+    setExportFormat,
+    getExportScopeLabel,
+    getRecordsForExport,
+    toggleFieldSelection,
+    toggleStageSelection,
+    selectAllFieldsInGroup,
+    handleExport,
+    handleExportCSV,
+    handleExportHTML,
+  } = exportHook;
+
+  const batchHook = useFollowUpContact({
+    currentRole,
+    currentUser,
+    followUpPlans,
+    setFollowUpPlans,
+    caseInfos,
+    operationLogs,
+    setOperationLogs,
+    findCaseInfoById,
+    getCurrentOperatorName,
+    queueReplayableChange,
+  });
+
+  const {
+    showBatchPanel,
+    setShowBatchPanel,
+    batchFilterType,
+    setBatchFilterType,
+    batchSelectedIds,
+    setBatchSelectedIds,
+    batchTargetStatus,
+    setBatchTargetStatus,
+    batchNoteTemplate,
+    setBatchNoteTemplate,
+    batchConfirmOpen,
+    setBatchConfirmOpen,
+    batchCandidates,
+    getBatchCandidates,
+    toggleBatchSelect,
+    selectAllBatchCandidates,
+    clearBatchSelection,
+    getCancelledCount,
+    executeBatchUpdate,
+  } = batchHook;
 
   const handleResetData = async () => {
     if (!confirm("确定要清空所有本地数据并恢复到初始示例数据吗？此操作不可撤销。")) {
@@ -1902,136 +1586,7 @@ function App() {
     setFollowUpEditDraft({ id: null, plan: null });
   };
 
-  const getFilterLabel = (): string => {
-    const stageLabel = activeStage ? `${activeStage}阶段` : "全部病例";
-    if (searchKeyword.trim()) {
-      return `${stageLabel} · 搜索「${searchKeyword.trim()}」`;
-    }
-    return stageLabel;
-  };
 
-  const getExportScopeLabel = (): string => {
-    switch (exportScope) {
-      case "all":
-        return "全部病例";
-      case "filtered":
-        return getFilterLabel();
-      case "custom":
-        if (exportCustomStages.length === 0) return "自定义（未选择阶段）";
-        return `自定义：${exportCustomStages.join("、")}`;
-      default:
-        return getFilterLabel();
-    }
-  };
-
-  const getRecordsForExport = (): string[][] => {
-    switch (exportScope) {
-      case "all":
-        return records;
-      case "filtered":
-        return filteredRecords;
-      case "custom":
-        if (exportCustomStages.length === 0) return [];
-        return records.filter((r) => exportCustomStages.includes(r[3]));
-      default:
-        return filteredRecords;
-    }
-  };
-
-  const toggleFieldSelection = (fieldKey: string) => {
-    setExportSelectedFields((prev) =>
-      prev.includes(fieldKey)
-        ? prev.filter((f) => f !== fieldKey)
-        : [...prev, fieldKey]
-    );
-  };
-
-  const toggleStageSelection = (stage: string) => {
-    setExportCustomStages((prev) =>
-      prev.includes(stage)
-        ? prev.filter((s) => s !== stage)
-        : [...prev, stage]
-    );
-  };
-
-  const selectAllFieldsInGroup = (groupKey: string) => {
-    const groupFields = EXPORT_FIELD_GROUPS[groupKey as keyof typeof EXPORT_FIELD_GROUPS]?.fields || [];
-    const fieldKeys = groupFields.map((f) => f.key);
-    setExportSelectedFields((prev) => {
-      const allSelected = fieldKeys.every((k) => prev.includes(k));
-      if (allSelected) {
-        return prev.filter((f) => !fieldKeys.includes(f));
-      } else {
-        return [...new Set([...prev, ...fieldKeys])];
-      }
-    });
-  };
-
-  const handleExport = () => {
-    if (exportSelectedFields.length === 0) {
-      alert("请至少选择一个导出字段");
-      return;
-    }
-
-    const exportRecords = getRecordsForExport();
-    if (exportRecords.length === 0) {
-      alert("当前筛选条件下没有可导出的记录");
-      return;
-    }
-
-    const rows = buildSummaryRows({
-      records: exportRecords,
-      caseInfos,
-      followUpPlans,
-      workingLengths,
-      operationLogs,
-      timelines,
-      selectedFields: exportSelectedFields,
-    });
-
-    const scopeLabel = getExportScopeLabel();
-    const dateStr = new Date().toISOString().split("T")[0];
-    const scopePart =
-      exportScope === "all"
-        ? "全部"
-        : exportScope === "filtered"
-        ? activeStage || "全部"
-        : exportCustomStages.length > 0
-        ? exportCustomStages.join("-")
-        : "自定义";
-    const searchPart = exportScope === "filtered" && searchKeyword.trim() ? `_搜索${searchKeyword.trim()}` : "";
-
-    if (exportFormat === "csv") {
-      const csvContent = generateCSVFromRows(rows, exportSelectedFields);
-      const filename = `根管治疗病例摘要_${scopePart}${searchPart}_${dateStr}.csv`;
-      downloadCSV(csvContent, filename);
-    } else {
-      const filterLabel = scopeLabel + (exportScope === "filtered" && searchKeyword.trim() ? "" : "");
-      const htmlContent = generatePrintableHTMLFromRows(rows, exportSelectedFields, filterLabel);
-      openPrintWindow(htmlContent);
-    }
-
-    setShowExportModal(false);
-  };
-
-  const handleExportCSV = () => {
-    const summaries = buildCaseSummaries(filteredRecords, followUpPlans, workingLengths);
-    const csvContent = generateCSV(summaries);
-    const dateStr = new Date().toISOString().split("T")[0];
-    const filterPart = activeStage ? activeStage : "全部";
-    const searchPart = searchKeyword.trim() ? `_搜索${searchKeyword.trim()}` : "";
-    const filename = `根管治疗病例摘要_${filterPart}${searchPart}_${dateStr}.csv`;
-    downloadCSV(csvContent, filename);
-    setShowExportModal(false);
-  };
-
-  const handleExportHTML = () => {
-    const summaries = buildCaseSummaries(filteredRecords, followUpPlans, workingLengths);
-    const filterLabel = getFilterLabel();
-    const htmlContent = generatePrintableHTML(summaries, filterLabel);
-    openPrintWindow(htmlContent);
-    setShowExportModal(false);
-  };
 
   const updateFollowUpDraft = (field: keyof FollowUpPlan, value: string | boolean) => {
     if (!followUpEditDraft.plan) return;
@@ -2140,117 +1695,7 @@ function App() {
     ));
   };
 
-  const getBatchCandidates = (): FollowUpPlan[] => {
-    return followUpPlans.filter(plan => {
-      const days = getDaysUntil(plan.nextDate);
-      switch (batchFilterType) {
-        case "overdue":
-          return days < 0;
-        case "within3days":
-          return days >= 0 && days <= 3;
-        case "pending":
-          return plan.contactStatus === "待联系";
-        default:
-          return false;
-      }
-    });
-  };
 
-  const toggleBatchSelect = (planId: string) => {
-    setBatchSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(planId)) {
-        next.delete(planId);
-      } else {
-        next.add(planId);
-      }
-      return next;
-    });
-  };
-
-  const selectAllBatchCandidates = () => {
-    const candidates = getBatchCandidates();
-    setBatchSelectedIds(new Set(candidates.map(c => c.id)));
-  };
-
-  const clearBatchSelection = () => {
-    setBatchSelectedIds(new Set());
-  };
-
-  const getCancelledCount = (): number => {
-    return Array.from(batchSelectedIds).filter(id => {
-      const plan = followUpPlans.find(p => p.id === id);
-      return plan?.contactStatus === "已取消";
-    }).length;
-  };
-
-  const executeBatchUpdate = () => {
-    const selectedPlans = Array.from(batchSelectedIds)
-      .map(id => followUpPlans.find(p => p.id === id))
-      .filter((p): p is FollowUpPlan => p !== null);
-
-    const blockedPlans = selectedPlans.filter(p => p.contactStatus === "已取消" && batchTargetStatus === "已确认");
-    if (blockedPlans.length > 0) {
-      alert(`${blockedPlans.length} 条已取消的计划不能批量改为已确认，已自动跳过`);
-    }
-
-    const validPlans = selectedPlans.filter(p => !(p.contactStatus === "已取消" && batchTargetStatus === "已确认"));
-    if (validPlans.length === 0) {
-      setBatchConfirmOpen(false);
-      return;
-    }
-
-    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-
-    validPlans.forEach(plan => {
-      if (plan.contactStatus !== batchTargetStatus) {
-        recordFieldChange(plan.caseId, "contactStatus", plan.contactStatus, batchTargetStatus);
-        queueReplayableChange({
-          caseId: plan.caseId,
-          entityType: "followUpPlan",
-          entityId: plan.id,
-          field: "contactStatus",
-          oldValue: plan.contactStatus,
-          newValue: batchTargetStatus,
-        });
-      }
-      if (batchNoteTemplate.trim()) {
-        const newNote = plan.contactNote
-          ? `${plan.contactNote}\n【${now}】${batchNoteTemplate.trim()}`
-          : `【${now}】${batchNoteTemplate.trim()}`;
-        recordFieldChange(plan.caseId, "contactNote", plan.contactNote, newNote);
-        queueReplayableChange({
-          caseId: plan.caseId,
-          entityType: "followUpPlan",
-          entityId: plan.id,
-          field: "contactNote",
-          oldValue: plan.contactNote,
-          newValue: newNote,
-        });
-      }
-      addOperationLog(
-        plan.caseId,
-        "批量更新联系状态",
-        `${plan.toothPosition} ${plan.patientName || ""}：${plan.contactStatus} → ${batchTargetStatus}${batchNoteTemplate.trim() ? "，备注：" + batchNoteTemplate.trim() : ""}`
-      );
-    });
-
-    setFollowUpPlans(prev => prev.map(plan => {
-      if (!batchSelectedIds.has(plan.id)) return plan;
-      if (plan.contactStatus === "已取消" && batchTargetStatus === "已确认") return plan;
-      return {
-        ...plan,
-        contactStatus: batchTargetStatus,
-        contactNote: batchNoteTemplate.trim()
-          ? (plan.contactNote ? `${plan.contactNote}\n【${now}】${batchNoteTemplate.trim()}` : `【${now}】${batchNoteTemplate.trim()}`)
-          : plan.contactNote,
-      };
-    }));
-
-    setBatchConfirmOpen(false);
-    setBatchSelectedIds(new Set());
-    setBatchNoteTemplate("");
-  };
 
   const filteredFollowUpPlans = contactStatusFilter
     ? followUpPlans.filter(p => p.contactStatus === contactStatusFilter)
