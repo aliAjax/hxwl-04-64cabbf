@@ -1317,22 +1317,20 @@ function App() {
       return;
     }
 
+    const currentTimeline = findTimeline(selectedToothPosition);
+    const newNodes = currentTimeline
+      ? currentTimeline.nodes.map(n => (n.id === node.id ? node : n))
+      : [node];
+
     setTimelines(prev => prev.map(timeline => {
       if (timeline.toothPosition !== selectedToothPosition) return timeline;
       return {
         ...timeline,
-        nodes: timeline.nodes.map(n =>
-          n.id === node.id ? node : n
-        ),
+        nodes: newNodes,
       };
     }));
 
-    setTimeout(() => {
-      const freshTimeline = findTimeline(selectedToothPosition);
-      if (freshTimeline) {
-        syncCaseStepFromTimeline(selectedToothPosition, freshTimeline.nodes);
-      }
-    }, 0);
+    syncCaseStepFromTimeline(selectedToothPosition, newNodes);
 
     if (selectedCaseId) {
       recordFieldChange(selectedCaseId, `timeline_${node.step}`, node.isCompleted ? "未完成" : "已完成", node.isCompleted ? "已完成" : "未完成");
@@ -1372,34 +1370,27 @@ function App() {
       }
     }
 
-    let updatedNodes: TimelineNode[] = [];
-    setTimelines(prev => prev.map(tl => {
-      if (tl.toothPosition !== timelineId) return tl;
-      const newNodes = tl.nodes.map(n => {
-        if (n.id === nodeId) {
-          return {
-            ...n,
-            isCompleted: newIsCompleted,
-            completedAt: newIsCompleted && !n.completedAt.trim()
-              ? new Date().toISOString().replace("T", " ").slice(0, 16)
-              : n.completedAt,
-            operator: newIsCompleted && !n.operator.trim()
-              ? defaultOperator
-              : n.operator,
-          };
-        }
-        return n;
-      });
-      updatedNodes = newNodes;
-      return { ...tl, nodes: newNodes };
-    }));
-
-    setTimeout(() => {
-      const freshTimeline = findTimeline(timelineId);
-      if (freshTimeline) {
-        syncCaseStepFromTimeline(timelineId, freshTimeline.nodes);
+    const newNodes = timeline.nodes.map(n => {
+      if (n.id === nodeId) {
+        return {
+          ...n,
+          isCompleted: newIsCompleted,
+          completedAt: newIsCompleted && !n.completedAt.trim()
+            ? new Date().toISOString().replace("T", " ").slice(0, 16)
+            : n.completedAt,
+          operator: newIsCompleted && !n.operator.trim()
+            ? defaultOperator
+            : n.operator,
+        };
       }
-    }, 0);
+      return n;
+    });
+
+    setTimelines(prev => prev.map(tl =>
+      tl.toothPosition === timelineId ? { ...tl, nodes: newNodes } : tl
+    ));
+
+    syncCaseStepFromTimeline(timelineId, newNodes);
 
     if (selectedCaseId) {
       recordFieldChange(selectedCaseId, `timeline_${targetNode.step}`, newIsCompleted ? "未完成" : "已完成", newIsCompleted ? "已完成" : "未完成");
