@@ -745,6 +745,41 @@ function App() {
     }, 1500 + Math.random() * 1000);
   };
 
+  const buildRecordDetail = (caseInfo: CaseBasicInfo): string => {
+    const details: string[] = [];
+    if (caseInfo.workingLength) details.push(`工作长度 ${caseInfo.workingLength}`);
+    if (caseInfo.mainFileNumber) details.push(`主尖锉${caseInfo.mainFileNumber}`);
+    if (caseInfo.medication) details.push(`封药：${caseInfo.medication}`);
+    if (caseInfo.remark) details.push(caseInfo.remark);
+    return details.join("，") || "无附加信息";
+  };
+
+  const syncRecordsFromCaseInfo = (caseId: string, updatedFields?: string[]) => {
+    const caseInfo = findCaseInfoById(caseId);
+    if (!caseInfo) return;
+
+    const fieldsToUpdate = updatedFields || ["toothPosition", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
+    const needsDetailUpdate = fieldsToUpdate.some(f => 
+      ["workingLength", "mainFileNumber", "medication", "remark"].includes(f)
+    );
+
+    setRecords(prev => prev.map(r => {
+      if (r[0] !== caseId) return r;
+      
+      const newRecord = [...r];
+      if (fieldsToUpdate.includes("toothPosition")) newRecord[1] = caseInfo.toothPosition;
+      if (fieldsToUpdate.includes("diagnosis")) newRecord[2] = caseInfo.diagnosis;
+      if (fieldsToUpdate.includes("currentStep")) {
+        newRecord[3] = caseInfo.currentStep;
+        newRecord[5] = caseInfo.currentStep === "充填" ? "已充填" : "待复诊";
+      }
+      if (needsDetailUpdate) {
+        newRecord[4] = buildRecordDetail(caseInfo);
+      }
+      return newRecord;
+    }));
+  };
+
   const resolveConflict = (conflictId: string, resolution: "local" | "remote" | { customValue: string }) => {
     const conflict = conflicts.find(c => c.id === conflictId);
     if (!conflict) return;
@@ -776,9 +811,34 @@ function App() {
 
     const caseInfoFields = ["toothPosition", "patientName", "phone", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
     if (caseInfoFields.includes(conflict.field)) {
+      const recordFields = ["toothPosition", "diagnosis", "currentStep", "workingLength", "mainFileNumber", "medication", "remark"];
+      const needsRecordUpdate = recordFields.includes(conflict.field);
+
       setCaseInfos(prev => prev.map(c => {
         if (c.id === conflict.caseId) {
-          return { ...c, [conflict.field]: resolvedValue, updatedAt: now.split(" ")[0] };
+          const updatedCaseInfo = { ...c, [conflict.field]: resolvedValue, updatedAt: now.split(" ")[0] };
+          
+          if (needsRecordUpdate) {
+            setRecords(prevRecords => prevRecords.map(r => {
+              if (r[0] !== conflict.caseId) return r;
+              
+              const newRecord = [...r];
+              if (conflict.field === "toothPosition") newRecord[1] = resolvedValue;
+              if (conflict.field === "diagnosis") newRecord[2] = resolvedValue;
+              if (conflict.field === "currentStep") {
+                newRecord[3] = resolvedValue;
+                newRecord[5] = resolvedValue === "充填" ? "已充填" : "待复诊";
+              }
+              
+              const detailFields = ["workingLength", "mainFileNumber", "medication", "remark"];
+              if (detailFields.includes(conflict.field)) {
+                newRecord[4] = buildRecordDetail(updatedCaseInfo);
+              }
+              return newRecord;
+            }));
+          }
+          
+          return updatedCaseInfo;
         }
         return c;
       }));
@@ -1319,7 +1379,8 @@ function App() {
     setRecords(prev => prev.map(r => {
       if (r[0] === selectedCaseId) {
         const status = updatedInfo.currentStep === "充填" ? "已充填" : "待复诊";
-        return [r[0], updatedInfo.toothPosition, updatedInfo.diagnosis, updatedInfo.currentStep, r[4], status];
+        const detail = buildRecordDetail(updatedInfo);
+        return [r[0], updatedInfo.toothPosition, updatedInfo.diagnosis, updatedInfo.currentStep, detail, status];
       }
       return r;
     }));
