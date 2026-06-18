@@ -1453,7 +1453,7 @@ function App() {
       case "filtered":
         return filteredRecords;
       case "custom":
-        if (exportCustomStages.length === 0) return records;
+        if (exportCustomStages.length === 0) return [];
         return records.filter((r) => exportCustomStages.includes(r[3]));
       default:
         return filteredRecords;
