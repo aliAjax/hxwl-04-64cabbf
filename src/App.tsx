@@ -388,8 +388,8 @@ function App() {
         isPersistEnabled.current = true;
 
         setTimeout(() => {
-          performConsistencyCheck(true);
-        }, 500);
+          performConsistencyCheck(true, migrated);
+        }, 100);
       } catch (err) {
         console.error("初始化 IndexedDB 失败：", err);
       } finally {
@@ -627,10 +627,10 @@ function App() {
     lastSyncAt,
   });
 
-  const performConsistencyCheck = async (silent: boolean = false) => {
+  const performConsistencyCheck = async (silent: boolean = false, inputData?: AppData) => {
     setIsCheckingConsistency(true);
     try {
-      const data = getCurrentAppData();
+      const data = inputData || getCurrentAppData();
       const issues = checkConsistency(data);
       setConsistencyIssues(issues);
       setLastConsistencyCheck(new Date().toISOString().replace("T", " ").slice(0, 19));

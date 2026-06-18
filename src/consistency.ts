@@ -275,27 +275,50 @@ export function checkConsistency(data: AppData): ConsistencyIssue[] {
     }
   });
 
-  const caseIdCounts = new Map<string, number>();
+  const caseInfoCaseIdCounts = new Map<string, number>();
   caseInfos.forEach((c) => {
-    caseIdCounts.set(c.id, (caseIdCounts.get(c.id) || 0) + 1);
+    caseInfoCaseIdCounts.set(c.id, (caseInfoCaseIdCounts.get(c.id) || 0) + 1);
   });
-  records.forEach((r) => {
-    caseIdCounts.set(r[0], (caseIdCounts.get(r[0]) || 0) + 1);
-  });
-  caseIdCounts.forEach((count, caseId) => {
+  caseInfoCaseIdCounts.forEach((count, caseId) => {
     if (count > 1) {
       const tooth = caseIdToTooth.get(caseId);
       issues.push({
         id: createIssueId(),
         type: "duplicate_case_id",
         severity: "error",
-        title: "重复 caseId",
-        description: `caseId「${caseId}」在多条记录中重复出现 ${count} 次`,
+        title: "重复 caseId (caseInfos)",
+        description: `caseId「${caseId}」在 caseInfos 表中重复出现 ${count} 次`,
         affectedEntities: [
           {
             caseId,
             toothPosition: tooth,
-            sourceTable: "caseInfos/records",
+            sourceTable: "caseInfos",
+          },
+        ],
+        autoFixable: false,
+      });
+    }
+  });
+
+  const recordCaseIdCounts = new Map<string, number>();
+  records.forEach((r) => {
+    const caseId = r[0];
+    recordCaseIdCounts.set(caseId, (recordCaseIdCounts.get(caseId) || 0) + 1);
+  });
+  recordCaseIdCounts.forEach((count, caseId) => {
+    if (count > 1) {
+      const tooth = caseIdToTooth.get(caseId);
+      issues.push({
+        id: createIssueId(),
+        type: "duplicate_case_id",
+        severity: "error",
+        title: "重复 caseId (records)",
+        description: `caseId「${caseId}」在 records 表中重复出现 ${count} 次`,
+        affectedEntities: [
+          {
+            caseId,
+            toothPosition: tooth,
+            sourceTable: "records",
           },
         ],
         autoFixable: false,
@@ -952,11 +975,12 @@ function deriveStepFromTimeline(
   timeline: TreatmentTimeline
 ): TreatmentStep | null {
   const nodes = timeline.nodes;
-  for (let i = 0; i < nodes.length; i++) {
-    if (!nodes[i].isCompleted) continue;
-    return nodes[i].step;
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    if (nodes[i].isCompleted) {
+      return nodes[i].step;
+    }
   }
-  return nodes[nodes.length - 1]?.step || null;
+  return null;
 }
 
 export function applyRepairs(
